@@ -39,6 +39,3 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
-
-# local JSON demo database (seeded at runtime from lib/mock-data.ts)
-/data

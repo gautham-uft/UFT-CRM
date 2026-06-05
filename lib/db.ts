@@ -11,13 +11,24 @@
 
 import { promises as fs } from "fs";
 import path from "path";
+import os from "os";
 import crypto from "crypto";
 
 import { mockPipelineStages } from "./mock-data";
+// The committed snapshot doubles as the seed that ships to production.
+import seedSnapshot from "../data/crm-db.json";
 
 // ── Where the data lives ──────────────────────────────────────────────────
 
-const DATA_DIR = path.join(process.cwd(), "data");
+// Most serverless hosts (Vercel included) make the project filesystem read-only
+// at runtime — only the OS temp dir is writable. So locally we persist to ./data
+// (survives restarts), and on Vercel we fall back to a writable temp location.
+//
+// IMPORTANT: that temp dir is per-instance and ephemeral on Vercel. Data created
+// at runtime resets on cold starts and is NOT shared across instances. That's
+// fine for checking functionality; use a hosted DB for durable, shared data.
+const WRITABLE_FS = !process.env.VERCEL;
+const DATA_DIR = WRITABLE_FS ? path.join(process.cwd(), "data") : path.join(os.tmpdir(), "uft-crm");
 const DB_FILE = path.join(DATA_DIR, "crm-db.json");
 
 // ── Collections ───────────────────────────────────────────────────────────
@@ -78,18 +89,24 @@ const SEED_LEADS: Row[] = [
 ];
 
 function buildSeed(): DB {
+  // Prefer the committed snapshot (data/crm-db.json) so whatever you commit is
+  // what ships and what /api/reset restores. Fall back to the inline defaults
+  // for any collection the snapshot is missing.
+  const snap = seedSnapshot as unknown as Partial<Record<CollectionName, Row[]>>;
+  const pick = (name: CollectionName, fallback: Row[]): Row[] =>
+    structuredClone(Array.isArray(snap[name]) ? (snap[name] as Row[]) : fallback);
   return {
-    leads: structuredClone(SEED_LEADS) as Row[],
-    contacts: [],
-    accounts: [],
-    deals: [],
-    products: [],
-    users: [],
-    roles: [],
-    activities: [],
-    followUps: [],
-    calendarEvents: [],
-    pipelineStages: structuredClone(mockPipelineStages) as Row[],
+    leads: pick("leads", SEED_LEADS),
+    contacts: pick("contacts", []),
+    accounts: pick("accounts", []),
+    deals: pick("deals", []),
+    products: pick("products", []),
+    users: pick("users", []),
+    roles: pick("roles", []),
+    activities: pick("activities", []),
+    followUps: pick("followUps", []),
+    calendarEvents: pick("calendarEvents", []),
+    pipelineStages: pick("pipelineStages", mockPipelineStages as unknown as Row[]),
   };
 }
 
