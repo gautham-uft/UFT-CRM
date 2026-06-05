@@ -1,65 +1,152 @@
-import Image from "next/image";
+"use client";
 
-export default function Home() {
+import { revenueOverTime, mockPipelineStages } from "@/lib/mock-data";
+import {
+  BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
+} from "recharts";
+import { TrendingUp, Users, Building2, Zap, DollarSign, Activity, ArrowUpRight } from "lucide-react";
+import { useChartColors } from "@/hooks/useChartColors";
+import { useCollection } from "@/hooks/useCollection";
+import { useAppData } from "@/contexts/AppDataContext";
+
+type DealRow = { id: string; stage_id: string; total_amount: number };
+
+const CLOSED_WON = "5";
+const CLOSED_LOST = "6";
+
+const activityIcons: Record<string, string> = {
+  call_log: "📞", email: "✉️", note: "📝", meeting: "📅",
+};
+
+export default function Dashboard() {
+  const c = useChartColors();
+  const { items: leads }    = useCollection<{ id: string }>("leads");
+  const { items: contacts } = useCollection<{ id: string }>("contacts");
+  const { items: accounts } = useCollection<{ id: string }>("accounts");
+  const { items: deals }    = useCollection<DealRow>("deals");
+  const { activities }      = useAppData();
+
+  // ── Derived metrics ───────────────────────────────────────────────
+  const openDeals    = deals.filter(d => d.stage_id !== CLOSED_WON && d.stage_id !== CLOSED_LOST);
+  const pipelineValue = openDeals.reduce((s, d) => s + (d.total_amount || 0), 0);
+  const closedWon    = deals.filter(d => d.stage_id === CLOSED_WON);
+  const closedWonValue = closedWon.reduce((s, d) => s + (d.total_amount || 0), 0);
+  const closedTotal  = deals.filter(d => d.stage_id === CLOSED_WON || d.stage_id === CLOSED_LOST).length;
+  const winRate      = closedTotal > 0 ? Math.round((closedWon.length / closedTotal) * 100) : 0;
+
+  // Pipeline grouped by stage (excludes Closed Lost), in stage order.
+  const dealsByStage = mockPipelineStages
+    .filter(s => s.name !== "Closed Lost")
+    .sort((a, b) => a.sort_order - b.sort_order)
+    .map(s => {
+      const stageDeals = deals.filter(d => d.stage_id === s.id);
+      return { stage: s.name, count: stageDeals.length, value: stageDeals.reduce((sum, d) => sum + (d.total_amount || 0), 0) };
+    });
+  const maxStageValue = Math.max(1, ...dealsByStage.map(s => s.value));
+
+  const statCards = [
+    { label: "Total Leads",      value: String(leads.length),            sub: `${leads.length} in queue`,                   icon: Zap,        color: "text-violet-400",      bg: "bg-violet-500/10" },
+    { label: "Open Deals",       value: String(openDeals.length),        sub: `$${pipelineValue.toLocaleString()} pipeline`, icon: TrendingUp, color: "text-[var(--a-text)]", bg: "bg-[var(--a-muted)]" },
+    { label: "Closed Won",       value: `$${closedWonValue.toLocaleString()}`, sub: `${closedWon.length} deal${closedWon.length === 1 ? "" : "s"} won`, icon: DollarSign, color: "text-emerald-400", bg: "bg-emerald-500/10" },
+    { label: "Total Contacts",   value: String(contacts.length),         sub: `Across ${accounts.length} accounts`,          icon: Users,      color: "text-sky-400",         bg: "bg-sky-500/10" },
+    { label: "Accounts",         value: String(accounts.length),         sub: "Active accounts",                             icon: Building2,  color: "text-amber-400",       bg: "bg-amber-500/10" },
+    { label: "Win Rate",         value: `${winRate}%`,                    sub: "Closed Won vs Lost",                          icon: Activity,   color: "text-rose-400",        bg: "bg-rose-500/10" },
+  ];
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
+    <div className="space-y-6">
+      {/* KPI Cards */}
+      <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
+        {statCards.map(({ label, value, sub, icon: Icon, color, bg }) => (
+          <div key={label} className="bg-[var(--surface)] border border-[var(--border)] rounded-xl p-4 hover:border-[var(--a-border)] transition-colors">
+            <div className="flex items-start justify-between mb-3">
+              <p className="text-[var(--tx5)] text-xs font-medium">{label}</p>
+              <div className={`w-7 h-7 rounded-lg ${bg} flex items-center justify-center`}>
+                <Icon size={14} className={color} />
+              </div>
+            </div>
+            <p className="text-[var(--tx1)] text-xl font-bold">{value}</p>
+            <p className="text-[var(--tx5)] text-xs mt-1">{sub}</p>
+          </div>
+        ))}
+      </div>
+
+      {/* Charts */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <div className="bg-[var(--surface)] border border-[var(--border)] rounded-xl p-5">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-[var(--tx2)] font-semibold text-sm">Pipeline by Stage</h2>
+            <span className="text-xs text-[var(--tx5)]">Open: ${pipelineValue.toLocaleString()}</span>
+          </div>
+          <ResponsiveContainer width="100%" height={220}>
+            <BarChart data={dealsByStage} margin={{ top: 0, right: 0, left: -20, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke={c.grid} />
+              <XAxis dataKey="stage" tick={{ fill: c.tick, fontSize: 11 }} />
+              <YAxis tick={{ fill: c.tick, fontSize: 11 }} />
+              <Tooltip
+                contentStyle={{ background: c.tooltip.background, border: `1px solid ${c.tooltip.border}`, borderRadius: 8, color: c.tooltip.color }}
+                formatter={(v) => [`$${Number(v).toLocaleString()}`, "Value"]}
+              />
+              <Bar dataKey="value" fill={c.bar} radius={[4, 4, 0, 0]} />
+            </BarChart>
+          </ResponsiveContainer>
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
+
+        <div className="bg-[var(--surface)] border border-[var(--border)] rounded-xl p-5">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-[var(--tx2)] font-semibold text-sm">Revenue Over Time</h2>
+            <span className="text-xs text-emerald-400 flex items-center gap-1"><ArrowUpRight size={12} /> +18% MoM</span>
+          </div>
+          <ResponsiveContainer width="100%" height={220}>
+            <LineChart data={revenueOverTime} margin={{ top: 0, right: 0, left: -20, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke={c.grid} />
+              <XAxis dataKey="month" tick={{ fill: c.tick, fontSize: 11 }} />
+              <YAxis tick={{ fill: c.tick, fontSize: 11 }} />
+              <Tooltip
+                contentStyle={{ background: c.tooltip.background, border: `1px solid ${c.tooltip.border}`, borderRadius: 8, color: c.tooltip.color }}
+                formatter={(v) => [`$${Number(v).toLocaleString()}`, "Revenue"]}
+              />
+              <Line type="monotone" dataKey="revenue" stroke={c.line} strokeWidth={2} dot={{ fill: c.dot, r: 4 }} />
+            </LineChart>
+          </ResponsiveContainer>
         </div>
-      </main>
+      </div>
+
+      {/* Bottom */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <div className="bg-[var(--surface)] border border-[var(--border)] rounded-xl p-5">
+          <h2 className="text-[var(--tx2)] font-semibold text-sm mb-4">Recent Activity</h2>
+          <div className="space-y-3">
+            {activities.length === 0 && <p className="text-[var(--tx6)] text-xs">No activity yet.</p>}
+            {activities.slice(0, 5).map((a) => (
+              <div key={a.id} className="flex items-start gap-3">
+                <span className="text-lg leading-none mt-0.5">{activityIcons[a.activity_type] ?? "📌"}</span>
+                <div className="flex-1 min-w-0">
+                  <p className="text-[var(--tx3)] text-xs leading-relaxed line-clamp-2">{a.description}</p>
+                  <p className="text-[var(--tx6)] text-xs mt-0.5">{a.user} · {new Date(a.created_at).toLocaleDateString()}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="bg-[var(--surface)] border border-[var(--border)] rounded-xl p-5">
+          <h2 className="text-[var(--tx2)] font-semibold text-sm mb-4">Deal Count by Stage</h2>
+          <div className="space-y-3">
+            {dealsByStage.map((s) => (
+              <div key={s.stage}>
+                <div className="flex justify-between text-xs mb-1">
+                  <span className="text-[var(--tx4)]">{s.stage}</span>
+                  <span className="text-[var(--tx4)]">{s.count} deals · ${s.value.toLocaleString()}</span>
+                </div>
+                <div className="h-2 bg-[var(--border)] rounded-full overflow-hidden">
+                  <div className="h-full bg-[var(--a)] rounded-full transition-all" style={{ width: `${(s.value / maxStageValue) * 100}%` }} />
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

@@ -1,26 +1,103 @@
 @import "tailwindcss";
 
+/* ── Default (Dark 1) applied via :root as fallback ───────────── */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --bg:       #080b18;
+  --surface:  #0d1120;
+  --border:   #17203a;
+  --surface2: #111828;
+  --surface3: #1b2540;
+  --tx1: #f8fafc;
+  --tx2: #e2e8f0;
+  --tx3: #cbd5e1;
+  --tx4: #94a3b8;
+  --tx5: #64748b;
+  --tx6: #475569;
+  --a:        #22c55e;
+  --a-hover:  #16a34a;
+  --a-muted:  #0a2618;
+  --a-subtle: #040e09;
+  --a-text:   #4ade80;
+  --a-border: #166534;
+  --a-ring:   #14532d;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+/* ── Dark 1: Deep Navy-Black + Green ── html selector wins over :root */
+html[data-theme="dark1"] {
+  --bg:       #080b18;
+  --surface:  #0d1120;
+  --border:   #17203a;
+  --surface2: #111828;
+  --surface3: #1b2540;
+  --tx1: #f8fafc;
+  --tx2: #e2e8f0;
+  --tx3: #cbd5e1;
+  --tx4: #94a3b8;
+  --tx5: #64748b;
+  --tx6: #475569;
+  --a:        #22c55e;
+  --a-hover:  #16a34a;
+  --a-muted:  #0a2618;
+  --a-subtle: #040e09;
+  --a-text:   #4ade80;
+  --a-border: #166534;
+  --a-ring:   #14532d;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+/* ── Dark 2: Deep Navy-Black + Blue ──────────────────────────── */
+html[data-theme="dark2"] {
+  --bg:       #05070f;
+  --surface:  #090d1e;
+  --border:   #101828;
+  --surface2: #0d1222;
+  --surface3: #141e38;
+  --tx1: #f8fafc;
+  --tx2: #e2e8f0;
+  --tx3: #cbd5e1;
+  --tx4: #94a3b8;
+  --tx5: #64748b;
+  --tx6: #475569;
+  --a:        #3b82f6;
+  --a-hover:  #2563eb;
+  --a-muted:  #0c1a3d;
+  --a-subtle: #050c1a;
+  --a-text:   #60a5fa;
+  --a-border: #1e40af;
+  --a-ring:   #1e3a8a;
+}
+
+/* ── Day: White + Navy Blue ── highest specificity, always wins ─ */
+html[data-theme="light"] {
+  --bg:       #f0f4f9;
+  --surface:  #ffffff;
+  --border:   #dde4f0;
+  --surface2: #f5f7fc;
+  --surface3: #e4eaf5;
+  --tx1: #0a0f1e;
+  --tx2: #1a2545;
+  --tx3: #2e3f68;
+  --tx4: #4a5f85;
+  --tx5: #6b80a2;
+  --tx6: #9aadc4;
+  --a:        #1e3a8a;
+  --a-hover:  #162e70;
+  --a-muted:  #e8eefa;
+  --a-subtle: #f0f4fd;
+  --a-text:   #1d4ed8;
+  --a-border: #93c5fd;
+  --a-ring:   #bfdbfe;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background-color: var(--bg);
+  color: var(--tx2);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  transition: background-color 0.2s ease, color 0.2s ease;
 }
+
+* { box-sizing: border-box; }
+
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: var(--surface); }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--surface3); }
