@@ -222,62 +222,14 @@
       "created_at": "2026-06-04"
     }
   ],
-  "contacts": [
-    {
-      "account_id": "959318e3-b0f4-47d7-aefe-e0712a6ecb97",
-      "first_name": "Daniel",
-      "last_name": "Kim",
-      "email": "daniel.kim@vertexdata.co",
-      "phone": "+1 555-0105",
-      "job_title": "",
-      "account_name": "Vertex Data",
-      "id": "f4074fc9-fd70-48e7-b6e1-6c19f1db933b"
-    }
-  ],
-  "accounts": [
-    {
-      "name": "Vertex Data",
-      "domain": "vertexdata.co",
-      "industry": "Other",
-      "website": "https://vertexdata.co",
-      "employee_count": 0,
-      "annual_revenue": "—",
-      "founded_year": 2026,
-      "contacts": 1,
-      "deals": 0,
-      "id": "959318e3-b0f4-47d7-aefe-e0712a6ecb97"
-    }
-  ],
-  "deals": [
-    {
-      "name": "dfdfdf",
-      "stage_id": "2",
-      "owner": "Gautham V.",
-      "account_name": "Vertex Data",
-      "total_amount": 50000,
-      "currency": "USD",
-      "created_at": "2026-06-06",
-      "contact": "Daniel Kim",
-      "id": "8fa00ed8-6ceb-44cc-ad65-c0bd97043f0c"
-    }
-  ],
+  "contacts": [],
+  "accounts": [],
+  "deals": [],
   "products": [],
   "users": [],
   "roles": [],
   "activities": [],
-  "followUps": [
-    {
-      "source": "lead",
-      "source_id": "6",
-      "entity_name": "Ananya Gupta · InnoSoft India",
-      "category": "callback",
-      "note": "Call back next week",
-      "follow_up_date": "2026-06-13",
-      "logged_at": "2026-06-06T07:20:00.000Z",
-      "done": false,
-      "id": "0055e94f-059b-4f87-8f22-da3d7c70339a"
-    }
-  ],
+  "followUps": [],
   "calendarEvents": [],
   "pipelineStages": [
     {
