@@ -2,14 +2,10 @@
 
 import { useEffect, useRef } from "react";
 import { useAppData } from "@/contexts/AppDataContext";
-import { Phone, Clock, Users, CheckSquare, AlertCircle, Zap, TrendingUp, CalendarClock } from "lucide-react";
+import { useNow } from "@/contexts/NowContext";
+import { Phone, Users, CheckSquare, AlertCircle, Zap, TrendingUp, CalendarClock } from "lucide-react";
 import { cn } from "@/lib/utils";
 import Link from "next/link";
-
-function todayStr() {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-}
 
 const EVENT_CFG = {
   meeting:  { Icon: Users,        color: "text-blue-400",   bg: "bg-blue-400/10",   label: "Meeting"  },
@@ -26,7 +22,7 @@ const SRC_CFG = {
 
 export default function NotificationsPanel({ onClose }: { onClose: () => void }) {
   const { calendarEvents, followUps } = useAppData();
-  const today = todayStr();
+  const { today } = useNow();
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -91,7 +87,7 @@ export default function NotificationsPanel({ onClose }: { onClose: () => void })
         {todayEvents.length > 0 && (
           <div>
             <div className="px-4 py-1.5 bg-[var(--surface2)] border-b border-[var(--border)]">
-              <span className="text-[10px] font-semibold text-[var(--tx5)] uppercase tracking-wide">Today's Schedule</span>
+              <span className="text-[10px] font-semibold text-[var(--tx5)] uppercase tracking-wide">Today&apos;s Schedule</span>
             </div>
             {todayEvents.map(e => {
               const cfg = EVENT_CFG[e.type];

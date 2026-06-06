@@ -1,9 +1,10 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
-import { ChevronLeft, ChevronRight, Phone, Mail, CheckSquare, Users, AlertCircle, Plus, X } from "lucide-react";
+import { ChevronLeft, ChevronRight, Phone, CheckSquare, Users, AlertCircle, Plus } from "lucide-react";
 import { type CalendarEvent, type CalendarEventType } from "@/lib/mock-data";
 import { useAppData } from "@/contexts/AppDataContext";
+import { useNow } from "@/contexts/NowContext";
 import { cn } from "@/lib/utils";
 
 const DAYS   = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
@@ -22,25 +23,49 @@ function toDateStr(y: number, m: number, d: number) {
   return `${y}-${pad(m + 1)}-${pad(d)}`;
 }
 
-function getTodayStr() {
-  const t = new Date();
-  return toDateStr(t.getFullYear(), t.getMonth(), t.getDate());
-}
-
 const EMPTY_FORM = { title: "", type: "task" as CalendarEventType, time: "", assignee: "", related_to: "" };
 
 export default function CalendarPanel({ onClose }: { onClose: () => void }) {
-  const { calendarEvents, addCalendarEvent } = useAppData();
+  const { calendarEvents, followUps, addCalendarEvent } = useAppData();
+  const { today: todayStr } = useNow();
 
-  const todayStr = getTodayStr();
-  const today    = new Date();
+  // Follow-ups (from leads & deals) show up on the calendar alongside real
+  // calendar events. Calendar-sourced follow-ups are skipped — their originating
+  // event is already in calendarEvents, so including them would double up.
+  const followUpEvents: CalendarEvent[] = followUps
+    .filter(f => f.source !== "calendar" && f.follow_up_date)
+    .map(f => ({
+      id:         `fu-${f.id}`,
+      title:      f.note || f.entity_name,
+      date:       f.follow_up_date!,
+      type:       f.category === "callback" || f.category === "call" ? "call"
+                : f.category === "deadline" ? "deadline"
+                : f.category === "task" ? "task" : "meeting",
+      related_to: f.entity_name,
+      done:       f.done,
+    }));
 
-  const [year,        setYear]        = useState(today.getFullYear());
-  const [month,       setMonth]       = useState(today.getMonth());
+  const allEvents = [...calendarEvents, ...followUpEvents];
+
+  const todayDate = new Date(todayStr + "T00:00:00");
+
+  const [year,        setYear]        = useState(todayDate.getFullYear());
+  const [month,       setMonth]       = useState(todayDate.getMonth());
   const [selected,    setSelected]    = useState(todayStr);
   const [showAddForm, setShowAddForm] = useState(false);
   const [form,        setForm]        = useState(EMPTY_FORM);
   const panelRef = useRef<HTMLDivElement>(null);
+
+  // When the app's "today" changes (testing date picker), jump the calendar to
+  // it. Adjusting state during render (React's recommended pattern) rather than
+  // in an effect avoids an extra render pass.
+  const [prevToday, setPrevToday] = useState(todayStr);
+  if (prevToday !== todayStr) {
+    setPrevToday(todayStr);
+    setYear(todayDate.getFullYear());
+    setMonth(todayDate.getMonth());
+    setSelected(todayStr);
+  }
 
   useEffect(() => {
     function handleClick(e: MouseEvent) {
@@ -72,12 +97,12 @@ export default function CalendarPanel({ onClose }: { onClose: () => void }) {
 
   const monthPrefix = `${year}-${pad(month + 1)}-`;
   const eventDays = new Set(
-    calendarEvents
+    allEvents
       .filter(e => e.date.startsWith(monthPrefix))
       .map(e => parseInt(e.date.slice(8)))
   );
 
-  const selectedEvents = calendarEvents
+  const selectedEvents = allEvents
     .filter(e => e.date === selected)
     .sort((a, b) => (a.time ?? "ZZ").localeCompare(b.time ?? "ZZ"));
 
@@ -150,9 +175,12 @@ export default function CalendarPanel({ onClose }: { onClose: () => void }) {
                   : "text-[var(--tx3)] hover:bg-[var(--surface2)]"
               )}
             >
-              {day}
-              {hasEvents && !isSelected && (
-                <span className="absolute bottom-0.5 left-1/2 -translate-x-1/2 w-1 h-1 rounded-full bg-[var(--a)]" />
+              <span className="leading-none -mt-1">{day}</span>
+              {hasEvents && (
+                <span className={cn(
+                  "absolute bottom-1 left-1/2 -translate-x-1/2 w-1.5 h-1.5 rounded-full",
+                  isSelected ? "bg-white" : "bg-[var(--a)]"
+                )} />
               )}
             </button>
           );

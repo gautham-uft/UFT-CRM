@@ -4,15 +4,23 @@ import { revenueOverTime, mockPipelineStages } from "@/lib/mock-data";
 import {
   BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
 } from "recharts";
-import { TrendingUp, Users, Building2, Zap, DollarSign, Activity, ArrowUpRight } from "lucide-react";
+import { TrendingUp, Users, Building2, Zap, DollarSign, Activity, ArrowUpRight, Bell, Clock } from "lucide-react";
 import { useChartColors } from "@/hooks/useChartColors";
 import { useCollection } from "@/hooks/useCollection";
 import { useAppData } from "@/contexts/AppDataContext";
+import { useNow } from "@/contexts/NowContext";
 
 type DealRow = { id: string; stage_id: string; total_amount: number };
 
 const CLOSED_WON = "5";
 const CLOSED_LOST = "6";
+
+// Whole-day difference between two YYYY-MM-DD dates (negative = `to` is past).
+function daysBetween(fromStr: string, toStr: string) {
+  const a = new Date(fromStr + "T00:00:00");
+  const b = new Date(toStr + "T00:00:00");
+  return Math.round((b.getTime() - a.getTime()) / 86_400_000);
+}
 
 const activityIcons: Record<string, string> = {
   call_log: "📞", email: "✉️", note: "📝", meeting: "📅",
@@ -24,7 +32,21 @@ export default function Dashboard() {
   const { items: contacts } = useCollection<{ id: string }>("contacts");
   const { items: accounts } = useCollection<{ id: string }>("accounts");
   const { items: deals }    = useCollection<DealRow>("deals");
-  const { activities }      = useAppData();
+  const { activities, calendarEvents, followUps } = useAppData();
+  const { today } = useNow();
+
+  // Events & follow-ups coming due within one day → banner alerts.
+  const dueSoon = [
+    ...calendarEvents
+      .filter(e => !e.done && e.date)
+      .map(e => ({ key: `ce-${e.id}`, name: e.title, kind: e.type, date: e.date })),
+    ...followUps
+      .filter(f => !f.done && f.follow_up_date && f.source !== "calendar")
+      .map(f => ({ key: `fu-${f.id}`, name: f.note || f.entity_name, kind: f.source, date: f.follow_up_date! })),
+  ]
+    .map(x => ({ ...x, days: daysBetween(today, x.date) }))
+    .filter(x => x.days >= 0 && x.days <= 1)
+    .sort((a, b) => a.days - b.days);
 
   // ── Derived metrics ───────────────────────────────────────────────
   const openDeals    = deals.filter(d => d.stage_id !== CLOSED_WON && d.stage_id !== CLOSED_LOST);
@@ -55,6 +77,22 @@ export default function Dashboard() {
 
   return (
     <div className="space-y-6">
+      {/* Due-soon banners */}
+      {dueSoon.length > 0 && (
+        <div className="space-y-2">
+          {dueSoon.map(item => (
+            <div key={item.key} className="flex items-center gap-3 px-4 py-2.5 rounded-xl border bg-rose-500/10 border-rose-500/40">
+              <Bell size={15} className="shrink-0 text-rose-400" />
+              <span className="text-[var(--tx2)] text-sm font-medium flex-1 truncate">{item.name}</span>
+              <span className="text-[10px] text-[var(--tx5)] uppercase tracking-wide bg-[var(--surface2)] px-2 py-0.5 rounded-full capitalize">{item.kind}</span>
+              <span className="flex items-center gap-1 text-xs font-semibold whitespace-nowrap text-rose-400">
+                <Clock size={12} /> {item.days === 0 ? "Due today" : `Due in ${item.days} day`}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+
       {/* KPI Cards */}
       <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
         {statCards.map(({ label, value, sub, icon: Icon, color, bg }) => (

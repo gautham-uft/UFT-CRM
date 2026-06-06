@@ -2,30 +2,52 @@
 
 import { useState } from "react";
 import { mockContacts } from "@/lib/mock-data";
-import { Plus, Mail, Phone, Building2, X, CheckCircle } from "lucide-react";
+import { Plus, Mail, Phone, Building2, X, CheckCircle, Trash2, AlertTriangle, Pencil, Flag } from "lucide-react";
 import { useAppData } from "@/contexts/AppDataContext";
 import { useCollection } from "@/hooks/useCollection";
+import { cn } from "@/lib/utils";
+import ColorFilter, { type ColorFilterValue, type RecordColor } from "@/components/ColorFilter";
 
-type Contact = (typeof mockContacts)[0];
+type Contact = (typeof mockContacts)[0] & { flagged?: boolean };
 
 const inputCls = "w-full px-3 py-2 bg-[var(--surface2)] border border-[var(--border)] rounded-lg text-[var(--tx2)] text-xs placeholder:text-[var(--tx6)] focus:outline-none focus:border-[var(--a-border)] transition-colors";
 const labelCls = "block text-[var(--tx5)] text-xs font-medium mb-1";
 
 const EMPTY_FORM = { first_name: "", last_name: "", job_title: "", account_name: "", email: "", phone: "" };
 
+// A contact may be missing details (yellow) or flagged as incorrect (red).
+// first_name / email are always present, so they don't count toward "missing".
+const contactIncomplete = (c: Contact) => !c.phone || !c.job_title || !c.account_name;
+const contactColor = (c: Contact): RecordColor => (c.flagged ? "red" : contactIncomplete(c) ? "yellow" : "white");
+
+const rowBg = (c: Contact) => {
+  const col = contactColor(c);
+  return col === "red"
+    ? "bg-rose-500/10 hover:bg-rose-500/20"
+    : col === "yellow"
+    ? "bg-amber-500/10 hover:bg-amber-500/20"
+    : "hover:bg-[var(--surface2)]";
+};
+
 export default function ContactsPage() {
   const { activities, addActivity } = useAppData();
 
-  const { items: contacts, create: createContact } = useCollection<Contact>("contacts");
+  const { items: contacts, create: createContact, update: updateContact, remove: removeContact } = useCollection<Contact>("contacts");
   const [selected,      setSelected]      = useState<Contact | null>(null);
   const [showAddModal,  setShowAddModal]  = useState(false);
   const [showLogModal,  setShowLogModal]  = useState(false);
+  const [editing,       setEditing]       = useState(false);
+  const [editForm,      setEditForm]      = useState(EMPTY_FORM);
   const [addForm,       setAddForm]       = useState(EMPTY_FORM);
   const [logNote,       setLogNote]       = useState("");
   const [logType,       setLogType]       = useState<"call_log" | "email" | "note" | "meeting">("call_log");
+  const [colorFilter,   setColorFilter]   = useState<ColorFilterValue>("all");
   const [toast,         setToast]         = useState("");
 
   function showToast(msg: string) { setToast(msg); setTimeout(() => setToast(""), 3000); }
+  function closeDetail() { setSelected(null); setEditing(false); }
+
+  const visible = contacts.filter(c => colorFilter === "all" || contactColor(c) === colorFilter);
 
   const relatedActivities = selected
     ? activities.filter(a =>
@@ -51,6 +73,51 @@ export default function ContactsPage() {
     showToast("Contact added");
   }
 
+  function startEdit() {
+    if (!selected) return;
+    setEditForm({
+      first_name:   selected.first_name,
+      last_name:    selected.last_name,
+      job_title:    selected.job_title ?? "",
+      account_name: selected.account_name ?? "",
+      email:        selected.email,
+      phone:        selected.phone ?? "",
+    });
+    setEditing(true);
+  }
+
+  function handleSaveEdit() {
+    if (!selected || !editForm.first_name.trim() || !editForm.email.trim()) return;
+    const patch = {
+      first_name:   editForm.first_name.trim(),
+      last_name:    editForm.last_name.trim(),
+      job_title:    editForm.job_title.trim(),
+      account_name: editForm.account_name.trim(),
+      email:        editForm.email.trim(),
+      phone:        editForm.phone.trim(),
+    };
+    updateContact(selected.id, patch);
+    setSelected(prev => (prev ? { ...prev, ...patch } : prev));
+    setEditing(false);
+    showToast("Contact updated");
+  }
+
+  function handleToggleFlag() {
+    if (!selected) return;
+    const next = !selected.flagged;
+    updateContact(selected.id, { flagged: next });
+    setSelected(prev => (prev ? { ...prev, flagged: next } : prev));
+    showToast(next ? "Flagged as incorrect" : "Flag removed");
+  }
+
+  function handleDeleteContact() {
+    if (!selected) return;
+    const name = `${selected.first_name} ${selected.last_name}`;
+    removeContact(selected.id);
+    closeDetail();
+    showToast(`${name} deleted`);
+  }
+
   function handleLogActivity() {
     if (!selected || !logNote.trim()) return;
     addActivity({
@@ -68,11 +135,14 @@ export default function ContactsPage() {
 
   return (
     <div className="h-[calc(100vh-112px)] flex flex-col gap-4">
-      <div className="flex items-center justify-between">
-        <span className="text-[var(--tx5)] text-sm">{contacts.length} contacts</span>
-        <button onClick={() => setShowAddModal(true)} className="flex items-center gap-2 px-3 py-1.5 bg-[var(--a)] text-white text-xs rounded-lg hover:bg-[var(--a-hover)] transition-colors">
-          <Plus size={13} /> Add Contact
-        </button>
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <span className="text-[var(--tx5)] text-sm">{visible.length} of {contacts.length} contacts</span>
+        <div className="flex items-center gap-3">
+          <ColorFilter value={colorFilter} onChange={setColorFilter} />
+          <button onClick={() => setShowAddModal(true)} className="flex items-center gap-2 px-3 py-1.5 bg-[var(--a)] text-white text-xs rounded-lg hover:bg-[var(--a-hover)] transition-colors">
+            <Plus size={13} /> Add Contact
+          </button>
+        </div>
       </div>
 
       <div className="flex-1 overflow-auto">
@@ -86,12 +156,13 @@ export default function ContactsPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-[var(--border)]">
-              {contacts.map(c => (
-                <tr key={c.id} onClick={() => setSelected(c)} className="hover:bg-[var(--surface2)] transition-colors cursor-pointer">
+              {visible.map(c => (
+                <tr key={c.id} onClick={() => { setSelected(c); setEditing(false); }} className={cn("transition-colors cursor-pointer", rowBg(c))}>
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-2">
                       <div className="w-7 h-7 rounded-full bg-sky-500/20 flex items-center justify-center text-sky-400 text-xs font-medium">{c.first_name[0]}{c.last_name[0]}</div>
                       <span className="text-[var(--tx2)] font-medium">{c.first_name} {c.last_name}</span>
+                      {c.flagged ? <Flag size={12} className="text-rose-400 shrink-0" /> : contactIncomplete(c) && <AlertTriangle size={12} className="text-amber-400 shrink-0" />}
                     </div>
                   </td>
                   <td className="px-4 py-3 text-[var(--tx4)] text-xs">{c.job_title || "—"}</td>
@@ -107,53 +178,80 @@ export default function ContactsPage() {
 
       {/* ── Contact detail modal ── */}
       {selected && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50" onClick={() => setSelected(null)}>
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50" onClick={closeDetail}>
           <div className="bg-[var(--surface)] border border-[var(--border)] rounded-2xl p-6 w-full max-w-lg mx-4 shadow-2xl max-h-[85vh] overflow-y-auto flex flex-col gap-5" onClick={e => e.stopPropagation()}>
             <div className="flex items-start justify-between">
-              <h2 className="text-[var(--tx2)] font-semibold text-sm">Contact Detail</h2>
-              <button onClick={() => setSelected(null)} className="text-[var(--tx5)] hover:text-[var(--tx3)] transition-colors"><X size={14} /></button>
+              <h2 className="text-[var(--tx2)] font-semibold text-sm">{editing ? "Edit Contact" : "Contact Detail"}</h2>
+              <div className="flex items-center gap-2">
+                {!editing && <button onClick={startEdit} className="flex items-center gap-1 text-[var(--tx5)] hover:text-[var(--a-text)] text-xs transition-colors"><Pencil size={13} /> Edit</button>}
+                <button onClick={closeDetail} className="text-[var(--tx5)] hover:text-[var(--tx3)] transition-colors"><X size={14} /></button>
+              </div>
             </div>
+
             <div className="flex flex-col items-center gap-2 py-2">
               <div className="w-16 h-16 rounded-full bg-sky-500/20 flex items-center justify-center text-sky-400 text-2xl font-bold">{selected.first_name[0]}{selected.last_name[0]}</div>
               <p className="text-[var(--tx1)] font-semibold text-base">{selected.first_name} {selected.last_name}</p>
               <p className="text-[var(--tx4)] text-xs">{selected.job_title || "No title"}</p>
               <span className="flex items-center gap-1.5 text-amber-400 text-xs"><Building2 size={11} /> {selected.account_name || "No account"}</span>
+              {selected.flagged && <span className="flex items-center gap-1 text-rose-400 text-[10px] font-medium"><Flag size={10} /> Flagged as incorrect</span>}
             </div>
-            <div className="space-y-2.5">
-              <a href={`mailto:${selected.email}`} className="flex items-center gap-3 p-2.5 bg-[var(--surface2)] rounded-lg hover:bg-[var(--surface3)] transition-colors">
-                <Mail size={14} className="text-[var(--a-text)]" />
-                <span className="text-[var(--tx3)] text-xs truncate">{selected.email}</span>
-              </a>
-              <a href={`tel:${selected.phone}`} className="flex items-center gap-3 p-2.5 bg-[var(--surface2)] rounded-lg hover:bg-[var(--surface3)] transition-colors">
-                <Phone size={14} className="text-emerald-400" />
-                <span className="text-[var(--tx3)] text-xs">{selected.phone || "No phone"}</span>
-              </a>
-            </div>
-            <div className="flex gap-2">
-              <button
-                onClick={() => { setLogType("call_log"); setShowLogModal(true); }}
-                className="flex-1 py-2 bg-[var(--a-muted)] border border-[var(--a-border)] text-[var(--a-text)] text-xs rounded-lg hover:bg-[var(--a-muted)] transition-colors"
-              >Log Call</button>
-              <button
-                onClick={() => window.open(`mailto:${selected.email}`, "_blank")}
-                className="flex-1 py-2 bg-[var(--surface2)] border border-[var(--border)] text-[var(--tx4)] text-xs rounded-lg hover:border-[var(--a-border)] transition-colors"
-              >Send Email</button>
-            </div>
-            <div>
-              <p className="text-[var(--tx5)] text-xs font-medium mb-3">Activity Timeline</p>
-              {relatedActivities.length === 0 ? (
-                <p className="text-[var(--tx6)] text-xs">No activities yet.</p>
-              ) : (
-                <div className="space-y-3">
-                  {relatedActivities.map(a => (
-                    <div key={a.id} className="flex items-start gap-2">
-                      <div className="w-1.5 h-1.5 rounded-full bg-[var(--a)] mt-1.5 shrink-0" />
-                      <div><p className="text-[var(--tx4)] text-xs leading-relaxed">{a.description}</p><p className="text-[var(--tx6)] text-xs mt-0.5">{new Date(a.created_at).toLocaleDateString()}</p></div>
-                    </div>
-                  ))}
+
+            {editing ? (
+              <>
+                <div className="space-y-4">
+                  <div className="grid grid-cols-2 gap-3">
+                    <div><label className={labelCls}>First Name *</label><input className={inputCls} value={editForm.first_name} onChange={e => setEditForm(f => ({ ...f, first_name: e.target.value }))} /></div>
+                    <div><label className={labelCls}>Last Name</label><input className={inputCls} value={editForm.last_name} onChange={e => setEditForm(f => ({ ...f, last_name: e.target.value }))} /></div>
+                  </div>
+                  <div><label className={labelCls}>Job Title</label><input className={inputCls} value={editForm.job_title} onChange={e => setEditForm(f => ({ ...f, job_title: e.target.value }))} /></div>
+                  <div><label className={labelCls}>Account</label><input className={inputCls} value={editForm.account_name} onChange={e => setEditForm(f => ({ ...f, account_name: e.target.value }))} /></div>
+                  <div><label className={labelCls}>Email *</label><input type="email" className={inputCls} value={editForm.email} onChange={e => setEditForm(f => ({ ...f, email: e.target.value }))} /></div>
+                  <div><label className={labelCls}>Phone</label><input type="tel" className={inputCls} value={editForm.phone} onChange={e => setEditForm(f => ({ ...f, phone: e.target.value }))} /></div>
                 </div>
-              )}
-            </div>
+                <div className="flex gap-3">
+                  <button onClick={() => setEditing(false)} className="flex-1 py-2.5 bg-[var(--surface2)] border border-[var(--border)] text-[var(--tx4)] text-sm rounded-xl hover:border-[var(--a-border)] transition-colors">Cancel</button>
+                  <button onClick={handleSaveEdit} disabled={!editForm.first_name.trim() || !editForm.email.trim()} className="flex-1 py-2.5 bg-[var(--a)] text-white text-sm rounded-xl hover:bg-[var(--a-hover)] font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed">Save Changes</button>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="space-y-2.5">
+                  <a href={`mailto:${selected.email}`} className="flex items-center gap-3 p-2.5 bg-[var(--surface2)] rounded-lg hover:bg-[var(--surface3)] transition-colors">
+                    <Mail size={14} className="text-[var(--a-text)]" />
+                    <span className="text-[var(--tx3)] text-xs truncate">{selected.email}</span>
+                  </a>
+                  <a href={`tel:${selected.phone}`} className="flex items-center gap-3 p-2.5 bg-[var(--surface2)] rounded-lg hover:bg-[var(--surface3)] transition-colors">
+                    <Phone size={14} className="text-emerald-400" />
+                    <span className="text-[var(--tx3)] text-xs">{selected.phone || "No phone"}</span>
+                  </a>
+                </div>
+                <div className="flex gap-2">
+                  <button onClick={() => { setLogType("call_log"); setShowLogModal(true); }} className="flex-1 py-2 bg-[var(--a-muted)] border border-[var(--a-border)] text-[var(--a-text)] text-xs rounded-lg hover:bg-[var(--a-muted)] transition-colors">Log Call</button>
+                  <button onClick={() => window.open(`mailto:${selected.email}`, "_blank")} className="flex-1 py-2 bg-[var(--surface2)] border border-[var(--border)] text-[var(--tx4)] text-xs rounded-lg hover:border-[var(--a-border)] transition-colors">Send Email</button>
+                </div>
+                <div>
+                  <p className="text-[var(--tx5)] text-xs font-medium mb-3">Activity Timeline</p>
+                  {relatedActivities.length === 0 ? (
+                    <p className="text-[var(--tx6)] text-xs">No activities yet.</p>
+                  ) : (
+                    <div className="space-y-3">
+                      {relatedActivities.map(a => (
+                        <div key={a.id} className="flex items-start gap-2">
+                          <div className="w-1.5 h-1.5 rounded-full bg-[var(--a)] mt-1.5 shrink-0" />
+                          <div><p className="text-[var(--tx4)] text-xs leading-relaxed">{a.description}</p><p className="text-[var(--tx6)] text-xs mt-0.5">{new Date(a.created_at).toLocaleDateString()}</p></div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                <div className="border-t border-[var(--border)] pt-4 grid grid-cols-2 gap-2">
+                  <button onClick={handleToggleFlag} className={cn("flex items-center justify-center gap-2 py-2.5 text-xs rounded-lg transition-colors font-medium border", selected.flagged ? "bg-[var(--surface2)] border-[var(--border)] text-[var(--tx4)] hover:border-[var(--a-border)]" : "bg-rose-500/10 border-rose-500/30 text-rose-400 hover:bg-rose-500/20")}>
+                    <Flag size={13} /> {selected.flagged ? "Remove Flag" : "Flag as Incorrect"}
+                  </button>
+                  <button onClick={handleDeleteContact} className="flex items-center justify-center gap-2 py-2.5 bg-rose-500/10 border border-rose-500/30 text-rose-400 text-xs rounded-lg hover:bg-rose-500/20 transition-colors font-medium"><Trash2 size={13} /> Delete</button>
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}

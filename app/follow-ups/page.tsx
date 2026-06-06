@@ -1,10 +1,12 @@
 "use client";
 
+import { useState } from "react";
 import { useAppData, type FollowUpItem } from "@/contexts/AppDataContext";
+import { useNow } from "@/contexts/NowContext";
 import { cn } from "@/lib/utils";
 import {
   Phone, Clock, XCircle, CheckCircle, Calendar, Check,
-  Zap, TrendingUp, CalendarClock,
+  Zap, TrendingUp, CalendarClock, Pencil, Trash2, X,
 } from "lucide-react";
 
 // ── Category config ───────────────────────────────────────────────
@@ -28,10 +30,8 @@ const SRC: Record<string, SrcCfg> = {
   calendar: { label: "Calendar", color: "text-sky-400",     Icon: CalendarClock },
 };
 
-function todayStr() {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-}
+const inputCls = "w-full px-3 py-2 bg-[var(--surface2)] border border-[var(--border)] rounded-lg text-[var(--tx2)] text-xs placeholder:text-[var(--tx6)] focus:outline-none focus:border-[var(--a-border)] transition-colors";
+const labelCls = "block text-[var(--tx5)] text-xs font-medium mb-1";
 
 function addDays(base: string, n: number) {
   const d = new Date(base + "T00:00:00");
@@ -41,13 +41,13 @@ function addDays(base: string, n: number) {
 
 // ── FollowUpCard ──────────────────────────────────────────────────
 
-function FollowUpCard({ item, onToggle }: { item: FollowUpItem; onToggle: () => void }) {
+function FollowUpCard({ item, onToggle, onEdit, onDelete }: { item: FollowUpItem; onToggle: () => void; onEdit: () => void; onDelete: () => void }) {
   const cat = CAT[item.category] ?? { label: item.category, color: "text-[var(--tx4)]", bg: "bg-[var(--surface2)] border-[var(--border)]", Icon: Calendar };
   const src = SRC[item.source] ?? SRC.calendar;
 
   return (
     <div className={cn(
-      "bg-[var(--surface)] border border-[var(--border)] rounded-xl p-4 hover:border-[var(--a-border)] transition-all",
+      "group bg-[var(--surface)] border border-[var(--border)] rounded-xl p-4 hover:border-[var(--a-border)] transition-all",
       item.done && "opacity-40"
     )}>
       <div className="flex items-start gap-3">
@@ -81,11 +81,19 @@ function FollowUpCard({ item, onToggle }: { item: FollowUpItem; onToggle: () => 
             <p className="text-[var(--tx4)] text-xs leading-relaxed mb-2">{item.note}</p>
           )}
 
-          {item.follow_up_date && (
-            <span className="flex items-center gap-1 text-[10px] text-[var(--tx5)]">
-              <Calendar size={9} /> {item.follow_up_date}
-            </span>
-          )}
+          <div className="flex items-center justify-between gap-2">
+            {item.follow_up_date ? (
+              <span className="flex items-center gap-1 text-[10px] text-[var(--tx5)]">
+                <Calendar size={9} /> {item.follow_up_date}
+              </span>
+            ) : <span className="text-[10px] text-[var(--tx6)]">No date set</span>}
+
+            {/* Edit / delete */}
+            <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+              <button onClick={onEdit} title="Edit" className="w-6 h-6 rounded-md flex items-center justify-center text-[var(--tx5)] hover:text-[var(--a-text)] hover:bg-[var(--surface2)] transition-colors"><Pencil size={12} /></button>
+              <button onClick={onDelete} title="Delete" className="w-6 h-6 rounded-md flex items-center justify-center text-[var(--tx5)] hover:text-rose-400 hover:bg-rose-500/10 transition-colors"><Trash2 size={12} /></button>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -94,10 +102,46 @@ function FollowUpCard({ item, onToggle }: { item: FollowUpItem; onToggle: () => 
 
 // ── Page ──────────────────────────────────────────────────────────
 
-export default function FollowUpsPage() {
-  const { followUps, toggleFollowUp } = useAppData();
+const CATEGORY_OPTIONS = ["callback", "postponed", "not_interested", "progressing", "call", "task", "deadline"];
 
-  const today   = todayStr();
+export default function FollowUpsPage() {
+  const { followUps, toggleFollowUp, updateFollowUp, deleteFollowUp } = useAppData();
+  const { today } = useNow();
+
+  const [editItem, setEditItem] = useState<FollowUpItem | null>(null);
+  const [editForm, setEditForm] = useState({ entity_name: "", category: "callback", note: "", follow_up_date: "" });
+  const [toast, setToast] = useState("");
+
+  function showToast(msg: string) { setToast(msg); setTimeout(() => setToast(""), 3000); }
+
+  function startEdit(item: FollowUpItem) {
+    setEditForm({
+      entity_name:    item.entity_name,
+      category:       item.category,
+      note:           item.note ?? "",
+      follow_up_date: item.follow_up_date ?? "",
+    });
+    setEditItem(item);
+  }
+
+  function handleSaveEdit() {
+    if (!editItem || !editForm.entity_name.trim()) return;
+    updateFollowUp(editItem.id, {
+      entity_name:    editForm.entity_name.trim(),
+      category:       editForm.category,
+      note:           editForm.note.trim(),
+      follow_up_date: editForm.follow_up_date || undefined,
+    });
+    setEditItem(null);
+    showToast("Follow-up updated");
+  }
+
+  function handleDelete(item: FollowUpItem) {
+    deleteFollowUp(item.id);
+    if (editItem?.id === item.id) setEditItem(null);
+    showToast("Follow-up deleted");
+  }
+
   const weekEnd = addDays(today, 7);
 
   const pending  = followUps.filter(f => !f.done);
@@ -150,11 +194,51 @@ export default function FollowUpsPage() {
             </div>
             <div className="space-y-2.5">
               {section.items.map(item => (
-                <FollowUpCard key={item.id} item={item} onToggle={() => toggleFollowUp(item.id)} />
+                <FollowUpCard
+                  key={item.id}
+                  item={item}
+                  onToggle={() => toggleFollowUp(item.id)}
+                  onEdit={() => startEdit(item)}
+                  onDelete={() => handleDelete(item)}
+                />
               ))}
             </div>
           </div>
         ))
+      )}
+
+      {/* ── Edit modal ── */}
+      {editItem && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50" onClick={() => setEditItem(null)}>
+          <div className="bg-[var(--surface)] border border-[var(--border)] rounded-2xl p-6 w-full max-w-md mx-4 shadow-2xl" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-5">
+              <h3 className="text-[var(--tx1)] font-semibold">Edit Follow-up</h3>
+              <button onClick={() => setEditItem(null)} className="text-[var(--tx5)] hover:text-[var(--tx3)]"><X size={16} /></button>
+            </div>
+            <div className="space-y-4">
+              <div><label className={labelCls}>Title *</label><input className={inputCls} value={editForm.entity_name} onChange={e => setEditForm(f => ({ ...f, entity_name: e.target.value }))} /></div>
+              <div>
+                <label className={labelCls}>Category</label>
+                <select className={inputCls} value={editForm.category} onChange={e => setEditForm(f => ({ ...f, category: e.target.value }))}>
+                  {CATEGORY_OPTIONS.map(c => <option key={c} value={c}>{CAT[c]?.label ?? c}</option>)}
+                </select>
+              </div>
+              <div><label className={labelCls}>Follow-up Date</label><input type="date" className={cn(inputCls, "[color-scheme:dark]")} value={editForm.follow_up_date} onChange={e => setEditForm(f => ({ ...f, follow_up_date: e.target.value }))} /></div>
+              <div><label className={labelCls}>Note</label><textarea rows={3} className={inputCls} style={{ resize: "none" }} value={editForm.note} onChange={e => setEditForm(f => ({ ...f, note: e.target.value }))} /></div>
+            </div>
+            <div className="flex gap-3 mt-6">
+              <button onClick={() => handleDelete(editItem)} className="flex items-center justify-center gap-2 py-2.5 px-4 bg-rose-500/10 border border-rose-500/30 text-rose-400 text-sm rounded-xl hover:bg-rose-500/20 transition-colors"><Trash2 size={14} /></button>
+              <button onClick={() => setEditItem(null)} className="flex-1 py-2.5 bg-[var(--surface2)] border border-[var(--border)] text-[var(--tx4)] text-sm rounded-xl hover:border-[var(--a-border)] transition-colors">Cancel</button>
+              <button onClick={handleSaveEdit} disabled={!editForm.entity_name.trim()} className="flex-1 py-2.5 bg-[var(--a)] text-white text-sm rounded-xl hover:bg-[var(--a-hover)] font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed">Save Changes</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {toast && (
+        <div className="fixed bottom-5 right-5 z-[100] px-4 py-3 rounded-xl text-sm font-medium shadow-2xl bg-[var(--surface)] border border-[var(--a-border)] text-[var(--a-text)] flex items-center gap-2">
+          <CheckCircle size={14} /> {toast}
+        </div>
       )}
     </div>
   );
