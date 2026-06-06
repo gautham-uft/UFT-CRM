@@ -56,3 +56,15 @@ export async function replaceCollection<T>(collection: string, rows: T[]): Promi
 export async function resetDatabase(): Promise<void> {
   await handle<{ ok: boolean }>(await fetch(`/api/reset`, { method: "POST" }));
 }
+
+// Reset everything except the Leads queue (contacts, accounts, deals,
+// follow-ups, calendar events, activities are all cleared).
+export async function resetKeepLeads(): Promise<void> {
+  await handle<{ ok: boolean }>(
+    await fetch(`/api/reset`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ keepLeads: true }),
+    }),
+  );
+}

@@ -223,3 +223,24 @@ export async function resetDB(): Promise<void> {
     for (const name of COLLECTIONS) db[name] = seed[name];
   });
 }
+
+// Reset everything created during a session but keep the Leads queue exactly as
+// it is. Every other data collection is emptied; the structural pipelineStages
+// config is preserved. (If leads were somehow wiped, fall back to the seed.)
+export async function resetKeepLeads(): Promise<void> {
+  await transaction((db) => {
+    if (!Array.isArray(db.leads) || db.leads.length === 0) {
+      db.leads = structuredClone(SEED_LEADS);
+    }
+    db.contacts = [];
+    db.accounts = [];
+    db.deals = [];
+    db.products = [];
+    db.users = [];
+    db.roles = [];
+    db.activities = [];
+    db.followUps = [];
+    db.calendarEvents = [];
+    db.pipelineStages = structuredClone(mockPipelineStages as unknown as Row[]);
+  });
+}

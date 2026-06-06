@@ -38,6 +38,8 @@ interface AppDataContextType {
   followUps:        FollowUpItem[];
   addFollowUp:      (item: Omit<FollowUpItem, "id">) => void;
   toggleFollowUp:   (id: string) => void;
+  updateFollowUp:   (id: string, patch: Partial<FollowUpItem>) => void;
+  deleteFollowUp:   (id: string) => void;
   activities:       ActivityItem[];
   addActivity:      (item: Omit<ActivityItem, "id">) => void;
   loading:          boolean;
@@ -49,6 +51,8 @@ const AppDataContext = createContext<AppDataContextType>({
   followUps:        [],
   addFollowUp:      () => {},
   toggleFollowUp:   () => {},
+  updateFollowUp:   () => {},
+  deleteFollowUp:   () => {},
   activities:       [],
   addActivity:      () => {},
   loading:          true,
@@ -128,6 +132,16 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
     });
   }
 
+  function updateFollowUp(id: string, patch: Partial<FollowUpItem>) {
+    setFollowUps((prev) => prev.map((f) => (f.id === id ? { ...f, ...patch } : f)));
+    updateItem<FollowUpItem>("followUps", id, patch).catch(() => {});
+  }
+
+  function deleteFollowUp(id: string) {
+    setFollowUps((prev) => prev.filter((f) => f.id !== id));
+    deleteItem("followUps", id).catch(() => {});
+  }
+
   function addActivity(item: Omit<ActivityItem, "id">) {
     createItem<ActivityItem>("activities", item).then((created) => {
       setActivities((prev) => [created, ...prev]);
@@ -137,7 +151,7 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
   return (
     <AppDataContext.Provider value={{
       calendarEvents, addCalendarEvent,
-      followUps, addFollowUp, toggleFollowUp,
+      followUps, addFollowUp, toggleFollowUp, updateFollowUp, deleteFollowUp,
       activities, addActivity,
       loading,
     }}>

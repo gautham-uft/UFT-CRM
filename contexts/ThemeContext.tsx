@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useContext, useEffect, useState } from "react";
+import { createContext, useContext, useEffect, useSyncExternalStore } from "react";
 
 export type Theme = "dark1" | "dark2" | "light";
 
@@ -15,30 +15,38 @@ function applyTheme(t: Theme) {
   document.documentElement.setAttribute("data-theme", t);
 }
 
-export function ThemeProvider({ children }: { children: React.ReactNode }) {
-  const [theme, setThemeState] = useState<Theme>(() => {
-    if (typeof window !== "undefined") {
-      return (localStorage.getItem("crm-theme") as Theme) ?? "dark1";
-    }
-    return "dark1";
-  });
+// The saved theme lives in localStorage, which is a client-only "external store".
+// Reading it via useSyncExternalStore (server snapshot = "dark1") keeps the first
+// client render identical to the server render — no hydration mismatch — while
+// still reflecting the real saved theme immediately after.
+const listeners = new Set<() => void>();
+function subscribe(cb: () => void) {
+  listeners.add(cb);
+  if (typeof window !== "undefined") window.addEventListener("storage", cb);
+  return () => {
+    listeners.delete(cb);
+    if (typeof window !== "undefined") window.removeEventListener("storage", cb);
+  };
+}
+function getSnapshot(): Theme {
+  return (localStorage.getItem("crm-theme") as Theme) || "dark1";
+}
+function getServerSnapshot(): Theme {
+  return "dark1";
+}
 
-  /* Apply on first render and whenever theme changes */
+export function ThemeProvider({ children }: { children: React.ReactNode }) {
+  const theme = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
+
+  /* Keep the DOM attribute in sync with the active theme (DOM side-effect). */
   useEffect(() => {
     applyTheme(theme);
   }, [theme]);
 
-  /* Sync on mount in case HTML attr differs from localStorage */
-  useEffect(() => {
-    const saved = (localStorage.getItem("crm-theme") as Theme) ?? "dark1";
-    setThemeState(saved);
-    applyTheme(saved);
-  }, []);
-
   const setTheme = (t: Theme) => {
-    setThemeState(t);
     localStorage.setItem("crm-theme", t);
     applyTheme(t);
+    listeners.forEach((l) => l());
   };
 
   return (
