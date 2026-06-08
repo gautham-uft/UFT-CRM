@@ -13,10 +13,10 @@ const inputCls = "w-full px-3 py-2 bg-[var(--surface2)] border border-[var(--bor
 const labelCls = "block text-[var(--tx5)] text-xs font-medium mb-1";
 
 const roleColors: Record<string, string> = {
-  "System Admin":       "bg-rose-500/15 text-rose-400 border-rose-500/30",
-  "RevOps Manager":     "bg-violet-500/15 text-violet-400 border-violet-500/30",
-  "Account Executive":  "bg-sky-500/15 text-sky-400 border-sky-500/30",
-  "SDR":                "bg-amber-500/15 text-amber-400 border-amber-500/30",
+  "Director":         "bg-rose-500/15 text-rose-400 border-rose-500/30",
+  "Business Manager": "bg-violet-500/15 text-violet-400 border-violet-500/30",
+  "Account Manager":  "bg-sky-500/15 text-sky-400 border-sky-500/30",
+  "Executive":        "bg-amber-500/15 text-amber-400 border-amber-500/30",
 };
 
 // Modules that a role can be granted Read / Write access to — the single

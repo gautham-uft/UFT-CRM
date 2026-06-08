@@ -228,38 +228,47 @@
   "products": [],
   "users": [
     {
-      "id": "admin",
-      "first_name": "Admin",
+      "id": "director",
+      "first_name": "Director",
       "last_name": "",
-      "email": "admin@uftech.com",
-      "role": "System Admin",
+      "email": "director@uftech.com",
+      "role": "Director",
       "is_active": true,
       "last_login": "Never"
     },
     {
-      "id": "natesh",
-      "first_name": "Natesh",
-      "last_name": "N S",
-      "email": "natesh.ns@uftech.com",
-      "role": "CEO",
+      "id": "bm-1",
+      "first_name": "BM-1",
+      "last_name": "",
+      "email": "bm-1@uftech.com",
+      "role": "Business Manager",
       "is_active": true,
       "last_login": "Never"
     },
     {
-      "id": "gayathri",
-      "first_name": "Gayathri",
-      "last_name": "Murthy",
-      "email": "gayathri.murthy@uftech.com",
-      "role": "Business Head",
+      "id": "am-1",
+      "first_name": "AM-1",
+      "last_name": "",
+      "email": "am-1@uftech.com",
+      "role": "Account Manager",
+      "is_active": true,
+      "last_login": "Never"
+    },
+    {
+      "id": "exec-1",
+      "first_name": "Exec-1",
+      "last_name": "",
+      "email": "exec-1@uftech.com",
+      "role": "Executive",
       "is_active": true,
       "last_login": "Never"
     }
   ],
   "roles": [
     {
-      "id": "system-admin",
-      "name": "System Admin",
-      "description": "Full read & write access to every module.",
+      "id": "director",
+      "name": "Director",
+      "description": "Full access to every module.",
       "permissions": [
         {
           "module": "Dashboard",
@@ -319,9 +328,9 @@
       ]
     },
     {
-      "id": "ceo",
-      "name": "CEO",
-      "description": "Full read & write access to every module.",
+      "id": "business-manager",
+      "name": "Business Manager",
+      "description": "Access to everything except user and role management.",
       "permissions": [
         {
           "module": "Dashboard",
@@ -365,25 +374,15 @@
         },
         {
           "module": "Products",
-          "read": true,
-          "write": true
-        },
-        {
-          "module": "User Management",
-          "read": true,
-          "write": true
-        },
-        {
-          "module": "Roles & Permissions",
           "read": true,
           "write": true
         }
       ]
     },
     {
-      "id": "business-head",
-      "name": "Business Head",
-      "description": "Full read & write access to every module.",
+      "id": "account-manager",
+      "name": "Account Manager",
+      "description": "Leads, accounts, contacts, activities, follow-ups, business cards and products — no deals.",
       "permissions": [
         {
           "module": "Dashboard",
@@ -406,11 +405,6 @@
           "write": true
         },
         {
-          "module": "Deals",
-          "read": true,
-          "write": true
-        },
-        {
           "module": "Activities",
           "read": true,
           "write": true
@@ -429,14 +423,36 @@
           "module": "Products",
           "read": true,
           "write": true
+        }
+      ]
+    },
+    {
+      "id": "executive",
+      "name": "Executive",
+      "description": "Views dashboard and activities; works leads and follow-ups; adds business cards.",
+      "permissions": [
+        {
+          "module": "Dashboard",
+          "read": true,
+          "write": false
         },
         {
-          "module": "User Management",
+          "module": "Leads",
           "read": true,
           "write": true
         },
         {
-          "module": "Roles & Permissions",
+          "module": "Activities",
+          "read": true,
+          "write": false
+        },
+        {
+          "module": "Follow-ups",
+          "read": true,
+          "write": true
+        },
+        {
+          "module": "Business Card",
           "read": true,
           "write": true
         }
@@ -483,5 +499,6 @@
       "sort_order": 6,
       "win_probability": 0
     }
-  ]
+  ],
+  "leadRequests": []
 }

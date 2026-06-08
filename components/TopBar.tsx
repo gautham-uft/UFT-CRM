@@ -1,11 +1,14 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 import { usePathname } from "next/navigation";
-import { Bell, Search, Moon, Sun, Telescope, CalendarDays } from "lucide-react";
+import { Bell, Search, Moon, Sun, Telescope, CalendarDays, Plus, CalendarPlus, ClipboardList, StickyNote } from "lucide-react";
 import { useTheme, type Theme } from "@/contexts/ThemeContext";
 import { useAppData } from "@/contexts/AppDataContext";
 import { useNow } from "@/contexts/NowContext";
+import { useQuickActions } from "@/components/QuickActions";
+import { useCurrentUser } from "@/contexts/CurrentUserContext";
+import { isRestrictedRole } from "@/lib/permissions";
 import { cn } from "@/lib/utils";
 import CalendarPanel from "@/components/CalendarPanel";
 import NotificationsPanel from "@/components/NotificationsPanel";
@@ -35,11 +38,33 @@ export default function TopBar() {
   const { theme, setTheme } = useTheme();
   const { followUps, calendarEvents } = useAppData();
   const { today } = useNow();
+  const { openScheduleMeeting, openAssignTask, openAddNote } = useQuickActions();
+  const { currentUser } = useCurrentUser();
+  // Executives can't schedule meetings or assign tasks.
+  const restricted = isRestrictedRole(currentUser.role);
   const base = "/" + pathname.split("/")[1];
   const title = titles[base] ?? "UFT CRM";
 
   const [calendarOpen, setCalendarOpen]   = useState(false);
   const [notifOpen,    setNotifOpen]      = useState(false);
+  const [quickOpen,    setQuickOpen]      = useState(false);
+  const quickRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    function handler(e: MouseEvent) {
+      if (quickRef.current && !quickRef.current.contains(e.target as Node)) setQuickOpen(false);
+    }
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, []);
+
+  const quickItems = [
+    ...(restricted ? [] : [
+      { label: "Schedule Meeting", Icon: CalendarPlus,  run: openScheduleMeeting },
+      { label: "Assign Task",      Icon: ClipboardList, run: openAssignTask },
+    ]),
+    { label: "Add Note", Icon: StickyNote, run: () => openAddNote() },
+  ];
 
   const notifCount =
     followUps.filter(f => !f.done && f.follow_up_date && f.follow_up_date <= today).length +
@@ -55,6 +80,36 @@ export default function TopBar() {
       </div>
 
       <div className="flex items-center gap-3">
+        {/* Quick add: schedule meeting / assign task / add note */}
+        <div className="relative" ref={quickRef}>
+          <button
+            onClick={() => setQuickOpen(o => !o)}
+            title="Quick add"
+            className={cn(
+              "flex items-center gap-1.5 h-8 px-2.5 rounded-lg border text-xs font-medium transition-colors",
+              quickOpen
+                ? "bg-[var(--a)] text-white border-[var(--a)]"
+                : "bg-[var(--surface2)] border-[var(--border)] hover:border-[var(--a-border)] text-[var(--tx4)]"
+            )}
+          >
+            <Plus size={14} /> <span className="hidden sm:inline">Quick Add</span>
+          </button>
+          {quickOpen && (
+            <div className="absolute top-full right-0 mt-2 w-52 bg-[var(--surface)] border border-[var(--border)] rounded-xl shadow-2xl z-50 p-1.5">
+              {quickItems.map(({ label, Icon, run }) => (
+                <button
+                  key={label}
+                  onClick={() => { run(); setQuickOpen(false); }}
+                  className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-left text-xs text-[var(--tx2)] hover:bg-[var(--surface2)] transition-colors"
+                >
+                  <span className="w-7 h-7 rounded-lg bg-[var(--a-muted)] flex items-center justify-center shrink-0"><Icon size={14} className="text-[var(--a-text)]" /></span>
+                  {label}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+
         {/* Theme switcher */}
         <div className="flex items-center gap-0.5 p-1 bg-[var(--surface2)] border border-[var(--border)] rounded-lg">
           {themes.map(({ id, label, icon }) => (

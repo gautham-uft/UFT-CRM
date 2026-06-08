@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 import { useCollection } from "@/hooks/useCollection";
 import { usePermissions } from "@/contexts/PermissionsContext";
 import NoAccess from "@/components/NoAccess";
+import SearchableSelect from "@/components/SearchableSelect";
 
 const inputCls = "w-full px-3 py-2 bg-[var(--surface2)] border border-[var(--border)] rounded-lg text-[var(--tx2)] text-xs placeholder:text-[var(--tx6)] focus:outline-none focus:border-[var(--a-border)] transition-colors";
 const labelCls = "block text-[var(--tx5)] text-xs font-medium mb-1";
@@ -166,11 +167,12 @@ export default function ProductsPage() {
             <p className="text-[var(--tx4)] text-xs mb-4">Adding <span className="text-[var(--tx2)] font-medium">{addToDealProd.name}</span> (${addToDealProd.base_price.toLocaleString()}) to:</p>
             <div>
               <label className={labelCls}>Select Deal</label>
-              <select className={inputCls} value={selectedDeal} onChange={e => setSelectedDeal(e.target.value)}>
-                {deals.filter(d => !["5","6"].includes(d.stage_id)).map(d => (
-                  <option key={d.id} value={d.id}>{d.name}</option>
-                ))}
-              </select>
+              <SearchableSelect
+                value={selectedDeal}
+                onChange={setSelectedDeal}
+                placeholder="Select deal"
+                options={deals.filter(d => !["5","6"].includes(d.stage_id)).map(d => ({ value: d.id, label: d.name }))}
+              />
             </div>
             <div className="flex gap-3 mt-5">
               <button onClick={() => setAddToDealProd(null)} className="flex-1 py-2.5 bg-[var(--surface2)] border border-[var(--border)] text-[var(--tx4)] text-sm rounded-xl">Cancel</button>

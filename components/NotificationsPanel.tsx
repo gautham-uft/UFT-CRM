@@ -25,6 +25,7 @@ const SRC_CFG = {
   lead:     { Icon: Zap,          color: "text-violet-400",  bg: "bg-violet-500/10"  },
   deal:     { Icon: TrendingUp,   color: "text-emerald-400", bg: "bg-emerald-500/10" },
   calendar: { Icon: CalendarClock, color: "text-sky-400",   bg: "bg-sky-500/10"     },
+  task:     { Icon: CheckSquare,  color: "text-amber-400",   bg: "bg-amber-500/10"   },
 } as const;
 
 export default function NotificationsPanel({ onClose }: { onClose: () => void }) {

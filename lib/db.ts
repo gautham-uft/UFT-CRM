@@ -58,6 +58,8 @@ export const COLLECTIONS = [
   "followUps",
   "calendarEvents",
   "pipelineStages",
+  "leadRequests",
+  "notes",
 ] as const;
 
 export type CollectionName = (typeof COLLECTIONS)[number];
@@ -120,6 +122,8 @@ function buildSeed(): DB {
     followUps: pick("followUps", []),
     calendarEvents: pick("calendarEvents", []),
     pipelineStages: pick("pipelineStages", mockPipelineStages as unknown as Row[]),
+    leadRequests: pick("leadRequests", []),
+    notes: pick("notes", []),
   };
 }
 

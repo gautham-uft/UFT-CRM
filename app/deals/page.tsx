@@ -2,12 +2,14 @@
 
 import { useState } from "react";
 import { mockDeals, mockPipelineStages } from "@/lib/mock-data";
-import { Plus, DollarSign, User, Building2, X, CheckCircle2, CheckCircle } from "lucide-react";
+import { Plus, DollarSign, User, Building2, X, CheckCircle2, CheckCircle, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAppData } from "@/contexts/AppDataContext";
 import { useCurrentUser } from "@/contexts/CurrentUserContext";
 import { usePermissions } from "@/contexts/PermissionsContext";
 import NoAccess from "@/components/NoAccess";
+import SearchableSelect from "@/components/SearchableSelect";
+import NotesSection from "@/components/NotesSection";
 import { useCollection } from "@/hooks/useCollection";
 
 const inputCls = "w-full px-3 py-2 bg-[var(--surface2)] border border-[var(--border)] rounded-lg text-[var(--tx2)] text-xs placeholder:text-[var(--tx6)] focus:outline-none focus:border-[var(--a-border)] transition-colors";
@@ -32,11 +34,13 @@ export default function DealsPage() {
   const { ready, canRead, canWrite: cw } = usePermissions();
   const canWrite = cw("Deals");
 
-  const { items: deals, create: createDeal, update: updateDeal } = useCollection<Deal>("deals");
+  const { items: deals, create: createDeal, update: updateDeal, remove: removeDeal } = useCollection<Deal>("deals");
   const { items: accounts } = useCollection<{ id: string; name: string }>("accounts");
   const { items: contacts } = useCollection<{ id: string; first_name: string; last_name: string }>("contacts");
   const [dragging,       setDragging]       = useState<string | null>(null);
   const [closedWonModal, setClosedWonModal] = useState<Deal | null>(null);
+  const [revertModal,    setRevertModal]    = useState<{ deal: Deal; stageId: string; stageName: string } | null>(null);
+  const [deleteTarget,   setDeleteTarget]   = useState<Deal | null>(null);
   const [selectedDeal,   setSelectedDeal]   = useState<Deal | null>(null);
   const [showAddModal,   setShowAddModal]   = useState(false);
   const [showLogModal,   setShowLogModal]   = useState(false);
@@ -54,14 +58,14 @@ export default function DealsPage() {
 
   const handleDrop = (stageId: string) => {
     if (!dragging) return;
-    const stage = mockPipelineStages.find(s => s.id === stageId);
-    if (stage?.name === "Closed Won") {
-      const deal = deals.find(d => d.id === dragging);
-      if (deal) setClosedWonModal(deal);
-    } else {
-      updateDeal(dragging, { stage_id: stageId });
-    }
+    const deal = deals.find(d => d.id === dragging);
     setDragging(null);
+    if (!deal || deal.stage_id === stageId) return;
+    const stage = mockPipelineStages.find(s => s.id === stageId);
+    if (stage?.name === "Closed Won") { setClosedWonModal(deal); return; }
+    // Moving a won deal back to an earlier stage needs confirmation.
+    if (deal.stage_id === "5") { setRevertModal({ deal, stageId, stageName: stage?.name ?? "" }); return; }
+    updateDeal(dragging, { stage_id: stageId });
   };
 
   const totalPipeline = deals.filter(d => !["5","6"].includes(d.stage_id)).reduce((s, d) => s + d.total_amount, 0);
@@ -191,11 +195,17 @@ export default function DealsPage() {
               ))}
             </div>
             {canWrite && (
-            <div className="flex gap-2">
-              <button onClick={() => { setLogNote(""); setShowLogModal(true); }} className="flex-1 py-2.5 bg-[var(--a-muted)] border border-[var(--a-border)] text-[var(--a-text)] text-xs rounded-lg hover:bg-[var(--a-muted)] transition-colors font-medium">Log Activity</button>
-              <button onClick={() => { setEditForm({ name: selectedDeal.name, account_name: selectedDeal.account_name, contact: selectedDeal.contact, amount: String(selectedDeal.total_amount), currency: selectedDeal.currency, stage_id: selectedDeal.stage_id, owner: selectedDeal.owner }); setShowEditModal(true); }} className="flex-1 py-2.5 bg-[var(--surface2)] border border-[var(--border)] text-[var(--tx4)] text-xs rounded-lg hover:border-[var(--a-border)] transition-colors">Edit Deal</button>
+            <div className="space-y-2">
+              <div className="flex gap-2">
+                <button onClick={() => { setLogNote(""); setShowLogModal(true); }} className="flex-1 py-2.5 bg-[var(--a-muted)] border border-[var(--a-border)] text-[var(--a-text)] text-xs rounded-lg hover:bg-[var(--a-muted)] transition-colors font-medium">Log Activity</button>
+                <button onClick={() => { setEditForm({ name: selectedDeal.name, account_name: selectedDeal.account_name, contact: selectedDeal.contact, amount: String(selectedDeal.total_amount), currency: selectedDeal.currency, stage_id: selectedDeal.stage_id, owner: selectedDeal.owner }); setShowEditModal(true); }} className="flex-1 py-2.5 bg-[var(--surface2)] border border-[var(--border)] text-[var(--tx4)] text-xs rounded-lg hover:border-[var(--a-border)] transition-colors">Edit Deal</button>
+              </div>
+              <button onClick={() => setDeleteTarget(selectedDeal)} className="w-full py-2.5 bg-rose-500/10 border border-rose-500/30 text-rose-400 text-xs rounded-lg hover:bg-rose-500/20 transition-colors font-medium flex items-center justify-center gap-2"><Trash2 size={13} /> Delete Deal</button>
             </div>
             )}
+            <div className="mt-5 pt-5 border-t border-[var(--border)]">
+              <NotesSection entityType="deal" entityId={selectedDeal.id} entityName={selectedDeal.name} canWrite={canWrite} />
+            </div>
           </div>
         </div>
       )}
@@ -292,6 +302,44 @@ export default function DealsPage() {
         </div>
       )}
 
+      {/* ── Re-open (move out of Closed Won) confirmation ── */}
+      {revertModal && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50">
+          <div className="bg-[var(--surface)] border border-amber-500/40 rounded-2xl p-6 w-full max-w-md mx-4 shadow-2xl">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-10 h-10 rounded-xl bg-amber-500/15 flex items-center justify-center"><CheckCircle2 size={20} className="text-amber-400" /></div>
+              <div><h3 className="text-[var(--tx1)] font-semibold">Re-open won deal?</h3><p className="text-[var(--tx5)] text-xs">This deal is currently Closed Won.</p></div>
+            </div>
+            <p className="text-[var(--tx4)] text-sm leading-relaxed">
+              Move <span className="text-[var(--tx2)] font-medium">{revertModal.deal.name}</span> from <span className="text-emerald-400 font-medium">Closed Won</span> back to <span className="text-[var(--tx2)] font-medium">{revertModal.stageName}</span>? It will no longer count as won revenue.
+            </p>
+            <div className="flex gap-3 mt-6">
+              <button onClick={() => setRevertModal(null)} className="flex-1 py-2.5 bg-[var(--surface2)] border border-[var(--border)] text-[var(--tx4)] text-sm rounded-xl">Cancel</button>
+              <button onClick={() => { updateDeal(revertModal.deal.id, { stage_id: revertModal.stageId }); setRevertModal(null); showToast(`Moved back to ${revertModal.stageName}`); }} className="flex-1 py-2.5 bg-amber-600 text-white text-sm rounded-xl hover:bg-amber-700 font-medium">Move it back</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Delete deal confirmation ── */}
+      {deleteTarget && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[60]">
+          <div className="bg-[var(--surface)] border border-[var(--border)] rounded-2xl p-6 w-full max-w-sm mx-4 shadow-2xl">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-[var(--tx1)] font-semibold">Delete Deal</h3>
+              <button onClick={() => setDeleteTarget(null)} className="text-[var(--tx5)] hover:text-[var(--tx3)]"><X size={16} /></button>
+            </div>
+            <p className="text-[var(--tx4)] text-sm leading-relaxed">
+              Delete <span className="text-[var(--tx2)] font-medium">{deleteTarget.name}</span>? This action cannot be undone.
+            </p>
+            <div className="flex gap-3 mt-6">
+              <button onClick={() => setDeleteTarget(null)} className="flex-1 py-2.5 bg-[var(--surface2)] border border-[var(--border)] text-[var(--tx4)] text-sm rounded-xl hover:border-[var(--a-border)] transition-colors">Cancel</button>
+              <button onClick={() => { removeDeal(deleteTarget.id); if (selectedDeal?.id === deleteTarget.id) setSelectedDeal(null); setDeleteTarget(null); showToast("Deal deleted"); }} className="flex-1 py-2.5 bg-rose-500 text-white text-sm rounded-xl hover:bg-rose-400 font-medium transition-colors">Delete</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ── Add Deal modal ── */}
       {showAddModal && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50">
@@ -305,17 +353,21 @@ export default function DealsPage() {
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className={labelCls}>Account</label>
-                  <select className={inputCls} value={addForm.account_name} onChange={e => setAddForm(f => ({ ...f, account_name: e.target.value }))}>
-                    <option value="">Select account</option>
-                    {accounts.map(a => <option key={a.id} value={a.name}>{a.name}</option>)}
-                  </select>
+                  <SearchableSelect
+                    value={addForm.account_name}
+                    onChange={v => setAddForm(f => ({ ...f, account_name: v }))}
+                    placeholder="Select account"
+                    options={accounts.map(a => ({ value: a.name, label: a.name }))}
+                  />
                 </div>
                 <div>
                   <label className={labelCls}>Contact</label>
-                  <select className={inputCls} value={addForm.contact} onChange={e => setAddForm(f => ({ ...f, contact: e.target.value }))}>
-                    <option value="">Select contact</option>
-                    {contacts.map(c => <option key={c.id} value={`${c.first_name} ${c.last_name}`}>{c.first_name} {c.last_name}</option>)}
-                  </select>
+                  <SearchableSelect
+                    value={addForm.contact}
+                    onChange={v => setAddForm(f => ({ ...f, contact: v }))}
+                    placeholder="Select contact"
+                    options={contacts.map(c => ({ value: `${c.first_name} ${c.last_name}`, label: `${c.first_name} ${c.last_name}` }))}
+                  />
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-3">
