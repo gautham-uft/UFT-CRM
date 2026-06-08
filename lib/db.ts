@@ -30,8 +30,9 @@ import seedSnapshot from "../data/crm-seed.json";
 // ── Where the data lives (JSONBin.io) ──────────────────────────────────────
 
 // Env vars win (set these on Vercel / in .env.local to point at your own bin).
-// The demo bin is used as a fallback so a fresh deploy works with zero config.
-const BIN_ID     = process.env.JSONBIN_BIN_ID     || "6a26508cf5f4af5e29c940c4";
+// Defaults are hardcoded so a fresh deploy works with zero config — this is the
+// production bin so Vercel reaches it even if its env vars aren't applied.
+const BIN_ID     = process.env.JSONBIN_BIN_ID     || "6a265edada38895dfe97f690";
 const ACCESS_KEY = process.env.JSONBIN_ACCESS_KEY || "$2a$10$jhmGA4nk/NubYQAdFpZTPuVXTbay2Wuhhnl1T5xt6IgmeXI0l1c7G";
 const BIN_URL    = `https://api.jsonbin.io/v3/b/${BIN_ID}`;
 
