@@ -4,13 +4,16 @@ import { mockPipelineStages } from "@/lib/mock-data";
 import {
   BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
 } from "recharts";
-import { TrendingUp, Users, Building2, Zap, DollarSign, Activity, ArrowUpRight, ArrowDownRight, Bell, Clock } from "lucide-react";
+import { TrendingUp, Users, Building2, Zap, DollarSign, Activity, ArrowUpRight, ArrowDownRight, Bell, Clock, CalendarPlus, ClipboardList, StickyNote } from "lucide-react";
 import { useChartColors } from "@/hooks/useChartColors";
 import { cn } from "@/lib/utils";
 import { useCollection } from "@/hooks/useCollection";
 import { useAppData } from "@/contexts/AppDataContext";
 import { useNow } from "@/contexts/NowContext";
 import { usePermissions } from "@/contexts/PermissionsContext";
+import { useQuickActions } from "@/components/QuickActions";
+import { useCurrentUser } from "@/contexts/CurrentUserContext";
+import { isRestrictedRole } from "@/lib/permissions";
 import NoAccess from "@/components/NoAccess";
 
 type DealRow = { id: string; stage_id: string; total_amount: number; created_at?: string };
@@ -38,6 +41,9 @@ export default function Dashboard() {
   const { activities, calendarEvents, followUps } = useAppData();
   const { today } = useNow();
   const { ready, canRead } = usePermissions();
+  const { openScheduleMeeting, openAssignTask, openAddNote } = useQuickActions();
+  const { currentUser } = useCurrentUser();
+  const restricted = isRestrictedRole(currentUser.role);
 
   // Events & follow-ups coming due within one day → banner alerts.
   const dueSoon = [
@@ -146,6 +152,29 @@ export default function Dashboard() {
         ))}
       </div>
 
+      {/* Quick actions card */}
+      <div className="bg-[var(--surface)] border border-[var(--border)] rounded-xl p-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div>
+          <h2 className="text-[var(--tx2)] font-semibold text-sm">Quick Actions</h2>
+          <p className="text-[var(--tx5)] text-xs mt-0.5">{restricted ? "Add a note to a record." : "Schedule a meeting or assign a task to your team."}</p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {!restricted && (
+            <>
+              <button onClick={openScheduleMeeting} className="flex items-center gap-2 px-3 py-2 bg-[var(--a)] text-white text-xs rounded-lg hover:bg-[var(--a-hover)] transition-colors">
+                <CalendarPlus size={14} /> Schedule a Meeting
+              </button>
+              <button onClick={openAssignTask} className="flex items-center gap-2 px-3 py-2 bg-[var(--surface2)] border border-[var(--border)] text-[var(--tx3)] text-xs rounded-lg hover:border-[var(--a-border)] transition-colors">
+                <ClipboardList size={14} /> Assign a Task
+              </button>
+            </>
+          )}
+          <button onClick={() => openAddNote()} className="flex items-center gap-2 px-3 py-2 bg-[var(--surface2)] border border-[var(--border)] text-[var(--tx3)] text-xs rounded-lg hover:border-[var(--a-border)] transition-colors">
+            <StickyNote size={14} /> Add a Note
+          </button>
+        </div>
+      </div>
+
       {/* Charts — Deals module */}
       {showDeals && (
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
@@ -178,24 +207,18 @@ export default function Dashboard() {
               </span>
             )}
           </div>
-          {revenueOverTime.length === 0 ? (
-            <div className="h-[220px] flex items-center justify-center text-center">
-              <p className="text-[var(--tx5)] text-xs">No closed-won revenue yet.<br />Win a deal to start tracking revenue over time.</p>
-            </div>
-          ) : (
-            <ResponsiveContainer width="100%" height={220}>
-              <LineChart data={revenueOverTime} margin={{ top: 0, right: 0, left: -20, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke={c.grid} />
-                <XAxis dataKey="month" tick={{ fill: c.tick, fontSize: 11 }} />
-                <YAxis tick={{ fill: c.tick, fontSize: 11 }} />
-                <Tooltip
-                  contentStyle={{ background: c.tooltip.background, border: `1px solid ${c.tooltip.border}`, borderRadius: 8, color: c.tooltip.color }}
-                  formatter={(v) => [`$${Number(v).toLocaleString()}`, "Revenue"]}
-                />
-                <Line type="monotone" dataKey="revenue" stroke={c.line} strokeWidth={2} dot={{ fill: c.dot, r: 4 }} />
-              </LineChart>
-            </ResponsiveContainer>
-          )}
+          <ResponsiveContainer width="100%" height={220}>
+            <LineChart data={revenueOverTime} margin={{ top: 0, right: 0, left: -20, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke={c.grid} />
+              <XAxis dataKey="month" tick={{ fill: c.tick, fontSize: 11 }} />
+              <YAxis tick={{ fill: c.tick, fontSize: 11 }} />
+              <Tooltip
+                contentStyle={{ background: c.tooltip.background, border: `1px solid ${c.tooltip.border}`, borderRadius: 8, color: c.tooltip.color }}
+                formatter={(v) => [`$${Number(v).toLocaleString()}`, "Revenue"]}
+              />
+              <Line type="monotone" dataKey="revenue" stroke={c.line} strokeWidth={2} dot={{ fill: c.dot, r: 4 }} />
+            </LineChart>
+          </ResponsiveContainer>
         </div>
       </div>
       )}

@@ -6,7 +6,7 @@ import { listCollection, createItem, updateItem, deleteItem } from "@/lib/api";
 
 // ── Types ─────────────────────────────────────────────────────────
 
-export type FollowUpSource = "lead" | "deal" | "calendar";
+export type FollowUpSource = "lead" | "deal" | "calendar" | "task";
 
 export type FollowUpItem = {
   id:              string;
@@ -18,6 +18,8 @@ export type FollowUpItem = {
   follow_up_date?: string;
   logged_at:       string;
   done:            boolean;
+  assignee?:       string;  // who the task is assigned to (task source)
+  assigned_by?:    string;  // who assigned it
 };
 
 export type ActivityItem = {
@@ -42,6 +44,7 @@ interface AppDataContextType {
   deleteFollowUp:   (id: string) => void;
   activities:       ActivityItem[];
   addActivity:      (item: Omit<ActivityItem, "id">) => void;
+  deleteActivity:   (id: string) => void;
   loading:          boolean;
 }
 
@@ -55,6 +58,7 @@ const AppDataContext = createContext<AppDataContextType>({
   deleteFollowUp:   () => {},
   activities:       [],
   addActivity:      () => {},
+  deleteActivity:   () => {},
   loading:          true,
 });
 
@@ -148,11 +152,16 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
     });
   }
 
+  function deleteActivity(id: string) {
+    setActivities((prev) => prev.filter((a) => a.id !== id));
+    deleteItem("activities", id).catch(() => {});
+  }
+
   return (
     <AppDataContext.Provider value={{
       calendarEvents, addCalendarEvent,
       followUps, addFollowUp, toggleFollowUp, updateFollowUp, deleteFollowUp,
-      activities, addActivity,
+      activities, addActivity, deleteActivity,
       loading,
     }}>
       {children}

@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   LayoutDashboard, Users, Building2, UserCircle, TrendingUp,
-  Activity, CreditCard, Package, ChevronRight, Zap,
+  Activity, CreditCard, ChevronRight, Zap,
   CalendarClock,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -23,7 +23,6 @@ const navItems = [
   { label: "Activities",    href: "/activities",    icon: Activity },
   { label: "Follow-ups",    href: "/follow-ups",    icon: CalendarClock },
   { label: "Business Card", href: "/business-card", icon: CreditCard },
-  { label: "Products",      href: "/products",      icon: Package },
 ];
 
 function getTodayStr() {

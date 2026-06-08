@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import {
   Cog, Clock, Database, UserCog, SlidersHorizontal,
   ChevronLeft, ChevronRight, RotateCcw, Check, X, AlertTriangle,
-  Users, Shield, RefreshCw, CloudUpload, CloudDownload,
+  Users, Shield, RefreshCw, CloudUpload, CloudDownload, Cloud, CloudOff,
 } from "lucide-react";
 import { useNow } from "@/contexts/NowContext";
 import { useCurrentUser, DEFAULT_USER, type CurrentUser } from "@/contexts/CurrentUserContext";
@@ -13,6 +13,7 @@ import { usePermissions } from "@/contexts/PermissionsContext";
 import { useCollection } from "@/hooks/useCollection";
 import { resetDatabase } from "@/lib/api";
 import { subscribe as syncSubscribe, getStatus as getSyncStatus, checkDivergence, syncLocalToCloud, syncCloudToLocal } from "@/lib/sync-store";
+import { subscribeMode, getModeSnapshot, getModeServerSnapshot, setOnlineMode } from "@/lib/data-mode";
 import { cn } from "@/lib/utils";
 
 type View = "menu" | "time" | "db" | "user" | "settings" | "sync";
@@ -57,7 +58,13 @@ export default function DevTools() {
 
   // Offline/cloud sync status (red indicator when local and cloud diverge).
   const sync = useSyncExternalStore(syncSubscribe, getSyncStatus, getSyncStatus);
-  const diverged = sync.diverged;
+  const onlineMode = useSyncExternalStore(subscribeMode, getModeSnapshot, getModeServerSnapshot);
+  const diverged = !onlineMode && sync.diverged;
+
+  function toggleOnlineMode() {
+    setOnlineMode(!onlineMode);
+    window.location.reload(); // reload so all data re-loads from the chosen source
+  }
 
   // Status indicator beside the bar: red = out of sync, blue = time overridden,
   // green = normal. (Out-of-sync takes priority over a time override.)
@@ -175,6 +182,23 @@ export default function DevTools() {
             {/* ── Menu ── */}
             {view === "menu" && (
               <div className="space-y-1.5">
+                {/* Online Mode toggle — direct cloud vs offline-first local copy */}
+                <button onClick={toggleOnlineMode} className={cn(rowCls, onlineMode && "border-emerald-500/50 bg-emerald-500/5")}>
+                  <span className={cn(iconBoxCls, onlineMode && "bg-emerald-500/15")}>
+                    {onlineMode ? <Cloud size={14} className="text-emerald-400" /> : <CloudOff size={14} className="text-[var(--tx4)]" />}
+                  </span>
+                  <span className="flex-1 min-w-0">
+                    <span className="block text-xs font-medium text-[var(--tx2)]">Online Mode</span>
+                    <span className="block text-[10px] text-[var(--tx5)] truncate">{onlineMode ? "Connected directly to the cloud" : "Using local copy (offline-first)"}</span>
+                  </span>
+                  <span className={cn(
+                    "relative w-9 h-5 rounded-full transition-colors shrink-0",
+                    onlineMode ? "bg-emerald-500" : "bg-[var(--surface3)]"
+                  )}>
+                    <span className={cn("absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all", onlineMode ? "left-[18px]" : "left-0.5")} />
+                  </span>
+                </button>
+
                 <button onClick={() => go("time")} title={fmtNow(now)} className={rowCls}>
                   <span className={iconBoxCls}><Clock size={14} className="text-[var(--a-text)]" /></span>
                   <span className="flex-1 min-w-0">
@@ -185,6 +209,7 @@ export default function DevTools() {
                   <ChevronRight size={14} className="text-[var(--tx5)] shrink-0" />
                 </button>
 
+                {!onlineMode && (
                 <button onClick={() => go("sync")} className={cn(rowCls, diverged && "border-rose-500/60 bg-rose-500/5")}>
                   <span className={cn(iconBoxCls, diverged && "bg-rose-500/15")}>
                     <RefreshCw size={14} className={diverged ? "text-rose-400" : "text-[var(--a-text)]"} />
@@ -200,6 +225,7 @@ export default function DevTools() {
                   </span>
                   <ChevronRight size={14} className="text-[var(--tx5)] shrink-0" />
                 </button>
+                )}
 
                 <button onClick={() => go("db")} className={rowCls}>
                   <span className={iconBoxCls}><Database size={14} className="text-[var(--a-text)]" /></span>

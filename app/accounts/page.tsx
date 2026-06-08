@@ -8,6 +8,7 @@ import { cn } from "@/lib/utils";
 import ColorFilter, { type ColorFilterValue, type RecordColor } from "@/components/ColorFilter";
 import { usePermissions } from "@/contexts/PermissionsContext";
 import NoAccess from "@/components/NoAccess";
+import NotesSection from "@/components/NotesSection";
 
 type Account = (typeof mockAccounts)[0] & { flagged?: boolean };
 type Contact = (typeof mockContacts)[0];
@@ -223,6 +224,9 @@ export default function AccountsPage() {
                       ))}
                     </div>
                   )}
+                </div>
+                <div className="border-t border-[var(--border)] pt-4">
+                  <NotesSection entityType="account" entityId={selected.id} entityName={selected.name} canWrite={canWrite} />
                 </div>
                 {canWrite && (
                 <div className="border-t border-[var(--border)] pt-4 grid grid-cols-2 gap-2">

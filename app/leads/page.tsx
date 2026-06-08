@@ -7,13 +7,29 @@ import {
   Zap, Plus, CheckSquare, Trash2, RefreshCw, X,
   Mail, Phone, Building2, Calendar, Tag, Activity,
   CheckCircle, XCircle, Clock, MessageSquare, Loader2,
-  Users, UserPlus, ArrowRight, Flag, Pencil,
+  Users, UserPlus, ArrowRight, Flag, Pencil, Send, Inbox,
+  MapPin, Link, Cake, FileText,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAppData } from "@/contexts/AppDataContext";
 import { useNow } from "@/contexts/NowContext";
 import { usePermissions } from "@/contexts/PermissionsContext";
+import { useCurrentUser } from "@/contexts/CurrentUserContext";
+import { isRestrictedRole } from "@/lib/permissions";
 import NoAccess from "@/components/NoAccess";
+import NotesSection from "@/components/NotesSection";
+import { useQuickActions } from "@/components/QuickActions";
+
+type LeadRequest = {
+  id:           string;
+  lead_id:      string;
+  lead_name:    string;
+  company_name: string;
+  requested_by: string;
+  requested_at: string;
+  status:       "pending" | "approved" | "rejected";
+  note?:        string;
+};
 
 // Add `n` days to a YYYY-MM-DD date string.
 function addDays(base: string, n: number) {
@@ -52,8 +68,19 @@ const activityTypeColors: Record<string, string> = {
 const inputCls = "w-full px-3 py-2 bg-[var(--surface2)] border border-[var(--border)] rounded-lg text-[var(--tx2)] text-xs placeholder:text-[var(--tx6)] focus:outline-none focus:border-[var(--a-border)] transition-colors";
 const labelCls = "block text-[var(--tx5)] text-xs font-medium mb-1";
 
-type Lead = (typeof mockLeads)[0] & { flagged?: boolean };
-type Contact = (typeof mockContacts)[0];
+type Lead = (typeof mockLeads)[0] & {
+  flagged?:       boolean;
+  date_of_birth?: string;
+  address?:       string;
+  linkedin?:      string;
+  summary?:       string;
+};
+type Contact = (typeof mockContacts)[0] & {
+  date_of_birth?: string;
+  address?:       string;
+  linkedin?:      string;
+  summary?:       string;
+};
 type Account = (typeof mockAccounts)[0];
 
 // ── Response feature ──────────────────────────────────────────────
@@ -196,6 +223,7 @@ function ApproveLeadModal({
   const [conForm, setConForm] = useState({
     first_name: lead.first_name, last_name: lead.last_name, job_title: "",
     account_name: lead.company_name, email: lead.email, phone: lead.phone ?? "",
+    date_of_birth: lead.date_of_birth ?? "", address: lead.address ?? "", linkedin: lead.linkedin ?? "", summary: lead.summary ?? "",
   });
 
   const total = (addAccount ? 1 : 0) + (addContact ? 1 : 0);
@@ -241,13 +269,17 @@ function ApproveLeadModal({
     if (!conForm.first_name.trim() || !conForm.email.trim() || saving) return;
     setSaving(true);
     await createContact({
-      account_id:   createdAccount?.id ?? "",
-      first_name:   conForm.first_name.trim(),
-      last_name:    conForm.last_name.trim(),
-      email:        conForm.email.trim(),
-      phone:        conForm.phone.trim(),
-      job_title:    conForm.job_title.trim(),
-      account_name: createdAccount?.name ?? conForm.account_name.trim(),
+      account_id:    createdAccount?.id ?? "",
+      first_name:    conForm.first_name.trim(),
+      last_name:     conForm.last_name.trim(),
+      email:         conForm.email.trim(),
+      phone:         conForm.phone.trim(),
+      job_title:     conForm.job_title.trim(),
+      account_name:  createdAccount?.name ?? conForm.account_name.trim(),
+      date_of_birth: conForm.date_of_birth,
+      address:       conForm.address.trim(),
+      linkedin:      conForm.linkedin.trim(),
+      summary:       conForm.summary.trim(),
     });
     setSaving(false);
     onApproved(lead.id, finishMessage());
@@ -365,17 +397,25 @@ function ApproveLeadModal({
 
 // ── Main page ─────────────────────────────────────────────────────
 
-const EMPTY_FORM = { first_name: "", last_name: "", email: "", phone: "", company_name: "", source: "inbound_web", status: "new" };
+const EMPTY_FORM = { first_name: "", last_name: "", email: "", phone: "", company_name: "", source: "inbound_web", status: "new", date_of_birth: "", address: "", linkedin: "", summary: "" };
 
 export default function LeadsPage() {
-  const { addFollowUp, activities } = useAppData();
+  const { addFollowUp, addActivity, activities } = useAppData();
   const { today, now } = useNow();
   const { ready, canRead, canWrite: canWriteFn } = usePermissions();
+  const { currentUser } = useCurrentUser();
+  const { openAddNote } = useQuickActions();
   const canWrite = canWriteFn("Leads");
+  // Executives (restricted) raise approval requests; everyone else approves them.
+  const restricted = isRestrictedRole(currentUser.role);
+  const userName = `${currentUser.first_name} ${currentUser.last_name}`.trim();
+  const nowISO = () => (now ? new Date(now).toISOString() : new Date().toISOString());
 
   const { items: leads, create: createLead, update: updateLead, remove: removeLead } = useCollection<Lead>("leads");
   const { create: createContact } = useCollection<Contact>("contacts");
   const { create: createAccount } = useCollection<Account>("accounts");
+  const { items: leadRequests, create: createRequest, update: updateRequest } = useCollection<LeadRequest>("leadRequests");
+  const [activeRequestId,   setActiveRequestId]   = useState<string | null>(null);
   const [selected,          setSelected]          = useState<Set<string>>(new Set());
   const [filter,            setFilter]            = useState("all");
   const [showAddModal,      setShowAddModal]      = useState(false);
@@ -392,10 +432,47 @@ export default function LeadsPage() {
 
   function showToast(msg: string) { setToast(msg); setTimeout(() => setToast(""), 3000); }
 
+  // Pending approval requests, keyed by lead id.
+  const pendingByLead = new Map(leadRequests.filter(r => r.status === "pending").map(r => [r.lead_id, r] as const));
+  const pendingRequests = leadRequests.filter(r => r.status === "pending");
+  const hasPending = (id: string) => pendingByLead.has(id);
+
   const filtered =
     filter === "all"       ? leads.filter(l => l.status !== "approved")
     : filter === "incorrect" ? leads.filter(l => l.flagged)
     : leads.filter(l => l.status === filter);
+
+  // ── Approval-request workflow ──────────────────────────────────────
+  function handleRequestApproval(lead: Lead) {
+    if (hasPending(lead.id)) { showToast("Approval already requested"); return; }
+    createRequest({
+      lead_id:      lead.id,
+      lead_name:    `${lead.first_name} ${lead.last_name}`,
+      company_name: lead.company_name,
+      requested_by: userName,
+      requested_at: nowISO(),
+      status:       "pending",
+    });
+    if (lead.status === "new") updateLead(lead.id, { status: "reviewing" });
+    addActivity({
+      user: userName, entity_type: "lead", entity_name: `${lead.first_name} ${lead.last_name}`,
+      activity_type: "note", description: `Requested approval for ${lead.company_name || "lead"}`, created_at: nowISO(),
+    });
+    showToast("Approval requested");
+    if (viewLead?.id === lead.id) setViewLead(null);
+  }
+  function startApproveRequest(req: LeadRequest) {
+    const lead = leads.find(l => l.id === req.lead_id);
+    if (!lead) { showToast("Lead no longer exists"); updateRequest(req.id, { status: "rejected" }); return; }
+    setActiveRequestId(req.id);
+    setApprovePreset(null);
+    setApproveLead(lead);
+  }
+  function rejectRequest(req: LeadRequest) {
+    updateRequest(req.id, { status: "rejected" });
+    updateLead(req.lead_id, { status: "rejected" });
+    showToast(`Request from ${req.requested_by} rejected`);
+  }
 
   const toggleSelect = (id: string) => setSelected(p => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n; });
   const toggleAll    = () => setSelected(selected.size === filtered.length ? new Set() : new Set(filtered.map(l => l.id)));
@@ -410,6 +487,7 @@ export default function LeadsPage() {
 
   function handleApproved(id: string, message: string) {
     updateLead(id, { status: "approved" });
+    if (activeRequestId) { updateRequest(activeRequestId, { status: "approved" }); setActiveRequestId(null); }
     setApproveLead(null);
     setApprovePreset(null);
     showToast(message);
@@ -428,6 +506,22 @@ export default function LeadsPage() {
   async function handleBulkApprove() {
     const ids = Array.from(selected);
     setSelected(new Set());
+    // Executives raise approval requests in bulk instead of approving directly.
+    if (restricted) {
+      let n = 0;
+      for (const id of ids) {
+        const lead = leads.find(l => l.id === id);
+        if (!lead || hasPending(id)) continue;
+        createRequest({
+          lead_id: id, lead_name: `${lead.first_name} ${lead.last_name}`, company_name: lead.company_name,
+          requested_by: userName, requested_at: nowISO(), status: "pending",
+        });
+        if (lead.status === "new") updateLead(id, { status: "reviewing" });
+        n++;
+      }
+      showToast(`${n} approval request${n === 1 ? "" : "s"} raised`);
+      return;
+    }
     for (const id of ids) {
       const lead = leads.find(l => l.id === id);
       if (!lead) continue;
@@ -447,13 +541,17 @@ export default function LeadsPage() {
         deals:          0,
       });
       await createContact({
-        account_id:   acc.id,
-        first_name:   lead.first_name,
-        last_name:    lead.last_name,
-        email:        lead.email,
-        phone:        lead.phone ?? "",
-        job_title:    "",
-        account_name: acc.name,
+        account_id:    acc.id,
+        first_name:    lead.first_name,
+        last_name:     lead.last_name,
+        email:         lead.email,
+        phone:         lead.phone ?? "",
+        job_title:     "",
+        account_name:  acc.name,
+        date_of_birth: lead.date_of_birth ?? "",
+        address:       lead.address ?? "",
+        linkedin:      lead.linkedin ?? "",
+        summary:       lead.summary ?? "",
       });
       updateLead(id, { status: "approved" });
     }
@@ -489,10 +587,14 @@ export default function LeadsPage() {
       last_name:    addForm.last_name.trim(),
       email:        addForm.email.trim(),
       phone:        addForm.phone.trim(),
-      company_name: addForm.company_name.trim(),
-      source:       addForm.source || "inbound_web",
-      status:       addForm.status,
-      created_at:   new Date().toISOString().slice(0,10),
+      company_name:  addForm.company_name.trim(),
+      source:        addForm.source || "inbound_web",
+      status:        addForm.status,
+      created_at:    new Date().toISOString().slice(0,10),
+      date_of_birth: addForm.date_of_birth,
+      address:       addForm.address.trim(),
+      linkedin:      addForm.linkedin.trim(),
+      summary:       addForm.summary.trim(),
     });
     setAddForm(EMPTY_FORM);
     setShowAddModal(false);
@@ -500,26 +602,34 @@ export default function LeadsPage() {
   }
   function startEditLead(lead: Lead) {
     setEditForm({
-      first_name:   lead.first_name,
-      last_name:    lead.last_name,
-      email:        lead.email,
-      phone:        lead.phone ?? "",
-      company_name: lead.company_name,
-      source:       lead.source,
-      status:       lead.status,
+      first_name:    lead.first_name,
+      last_name:     lead.last_name,
+      email:         lead.email,
+      phone:         lead.phone ?? "",
+      company_name:  lead.company_name,
+      source:        lead.source,
+      status:        lead.status,
+      date_of_birth: lead.date_of_birth ?? "",
+      address:       lead.address ?? "",
+      linkedin:      lead.linkedin ?? "",
+      summary:       lead.summary ?? "",
     });
     setEditLead(lead);
   }
   function handleSaveEditLead() {
     if (!editLead || !editForm.first_name.trim() || !editForm.email.trim()) return;
     const patch = {
-      first_name:   editForm.first_name.trim(),
-      last_name:    editForm.last_name.trim(),
-      email:        editForm.email.trim(),
-      phone:        editForm.phone.trim(),
-      company_name: editForm.company_name.trim(),
-      source:       editForm.source,
-      status:       editForm.status,
+      first_name:    editForm.first_name.trim(),
+      last_name:     editForm.last_name.trim(),
+      email:         editForm.email.trim(),
+      phone:         editForm.phone.trim(),
+      company_name:  editForm.company_name.trim(),
+      source:        editForm.source,
+      status:        editForm.status,
+      date_of_birth: editForm.date_of_birth,
+      address:       editForm.address.trim(),
+      linkedin:      editForm.linkedin.trim(),
+      summary:       editForm.summary.trim(),
     };
     updateLead(editLead.id, patch);
     setViewLead(prev => (prev && prev.id === editLead.id ? { ...prev, ...patch } : prev));
@@ -550,10 +660,10 @@ export default function LeadsPage() {
   if (ready && !canRead("Leads")) return <NoAccess module="Leads" />;
 
   return (
-    <div className="h-[calc(100vh-112px)] flex flex-col gap-4">
+    <div className="flex flex-col gap-4">
 
       {/* ── Table ── */}
-      <div className="flex flex-col gap-4 flex-1 overflow-auto">
+      <div className="flex flex-col gap-4">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <span className="text-[var(--tx5)] text-sm">{leads.length} total leads</span>
@@ -563,7 +673,7 @@ export default function LeadsPage() {
           <div className="flex items-center gap-2">
             {selected.size > 0 && (
               <>
-                <button onClick={handleBulkApprove} className="flex items-center gap-2 px-3 py-1.5 bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs rounded-lg hover:bg-emerald-500/20 transition-colors"><CheckSquare size={13} /> Bulk Approve</button>
+                <button onClick={handleBulkApprove} className="flex items-center gap-2 px-3 py-1.5 bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs rounded-lg hover:bg-emerald-500/20 transition-colors">{restricted ? <><Send size={13} /> Request Approval</> : <><CheckSquare size={13} /> Bulk Approve</>}</button>
                 <button onClick={handleBulkReject}  className="flex items-center gap-2 px-3 py-1.5 bg-rose-500/10 border border-rose-500/30 text-rose-400 text-xs rounded-lg hover:bg-rose-500/20 transition-colors"><XCircle size={13} /> Reject</button>
                 <button onClick={handleBulkDelete}  className="flex items-center gap-2 px-3 py-1.5 bg-rose-500/20 border border-rose-500/40 text-rose-300 text-xs rounded-lg hover:bg-rose-500/30 transition-colors"><Trash2 size={13} /> Delete</button>
               </>
@@ -572,6 +682,7 @@ export default function LeadsPage() {
               {syncing ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />}
               {syncing ? "Syncing…" : "Sync Apify"}
             </button>
+            <button onClick={() => openAddNote()} className="flex items-center gap-2 px-3 py-1.5 bg-[var(--surface2)] border border-[var(--border)] text-[var(--tx4)] text-xs rounded-lg hover:border-[var(--a-border)] transition-colors"><MessageSquare size={13} /> Add Note</button>
             <button onClick={() => setShowAddModal(true)} className="flex items-center gap-2 px-3 py-1.5 bg-[var(--a)] text-white text-xs rounded-lg hover:bg-[var(--a-hover)] transition-colors"><Plus size={13} /> Add Lead</button>
           </div>
           )}
@@ -593,9 +704,51 @@ export default function LeadsPage() {
           >
             <span>Incorrect<br />Data</span>
           </button>
+          {/* Approval requests queue — visible to approvers (not Executives) */}
+          {!restricted && (
+            <button
+              onClick={() => setFilter("requests")}
+              className={cn(
+                "px-3 py-1.5 rounded-md text-xs font-medium transition-colors flex items-center gap-1.5",
+                filter === "requests" ? "bg-[var(--a)] text-white" : "text-[var(--tx4)] hover:text-[var(--tx2)]"
+              )}
+            >
+              <Inbox size={13} /> Requests
+              {pendingRequests.length > 0 && (
+                <span className={cn("min-w-[16px] h-4 px-1 text-[9px] font-bold rounded-full flex items-center justify-center leading-none",
+                  filter === "requests" ? "bg-white/25 text-white" : "bg-amber-500 text-white")}>{pendingRequests.length}</span>
+              )}
+            </button>
+          )}
         </div>
 
-        {/* Table */}
+        {/* Requests queue (approvers) */}
+        {filter === "requests" ? (
+          <div className="bg-[var(--surface)] border border-[var(--border)] rounded-xl overflow-hidden">
+            {pendingRequests.length === 0 ? (
+              <p className="px-4 py-10 text-center text-[var(--tx5)] text-sm">No pending approval requests.</p>
+            ) : (
+              <div className="divide-y divide-[var(--border)]">
+                {pendingRequests.map(req => (
+                  <div key={req.id} className="flex items-center gap-3 px-4 py-3 hover:bg-[var(--surface2)] transition-colors">
+                    <div className="w-8 h-8 rounded-lg bg-amber-500/15 flex items-center justify-center shrink-0"><Send size={14} className="text-amber-400" /></div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-[var(--tx2)] text-sm font-medium truncate">{req.lead_name} <span className="text-[var(--tx5)] font-normal">· {req.company_name}</span></p>
+                      <p className="text-[var(--tx6)] text-[10px] mt-0.5">Requested by {req.requested_by} · {new Date(req.requested_at).toLocaleDateString()}</p>
+                    </div>
+                    {canWrite && (
+                      <div className="flex items-center gap-2 shrink-0">
+                        <button onClick={() => startApproveRequest(req)} className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs rounded-lg hover:bg-emerald-500/20 transition-colors"><CheckCircle size={13} /> Approve</button>
+                        <button onClick={() => rejectRequest(req)} className="flex items-center gap-1.5 px-3 py-1.5 bg-rose-500/10 border border-rose-500/30 text-rose-400 text-xs rounded-lg hover:bg-rose-500/20 transition-colors"><XCircle size={13} /> Reject</button>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        ) : (
+        /* Table */
         <div className="bg-[var(--surface)] border border-[var(--border)] rounded-xl overflow-hidden">
           <table className="w-full text-sm">
             <thead>
@@ -626,6 +779,7 @@ export default function LeadsPage() {
                         <div className="min-w-0">
                           <span className="text-[var(--tx2)] font-medium truncate flex items-center gap-1.5">{lead.first_name} {lead.last_name}{lead.flagged && <Flag size={11} className="text-rose-400 shrink-0" />}</span>
                           {rCfg && <span className={cn("flex items-center gap-1 text-[10px] mt-0.5", rCfg.text)}><rCfg.Icon size={9} />{rCfg.label}{resp.follow_up_date && <span className="text-[var(--tx6)]">· {resp.follow_up_date}</span>}</span>}
+                          {hasPending(lead.id) && <span className="flex items-center gap-1 text-[10px] mt-0.5 text-amber-400"><Send size={9} /> Approval requested</span>}
                         </div>
                       </div>
                     </td>
@@ -637,7 +791,11 @@ export default function LeadsPage() {
                     {canWrite && (
                     <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
                       <div className="flex items-center gap-2">
-                        <button onClick={() => { setApprovePreset(null); setApproveLead(lead); }} className="text-xs text-emerald-400 hover:text-emerald-300 transition-colors">Approve</button>
+                        {restricted ? (
+                          <button onClick={() => handleRequestApproval(lead)} disabled={hasPending(lead.id)} className="flex items-center gap-1 text-xs text-amber-400 hover:text-amber-300 transition-colors disabled:opacity-50 disabled:cursor-default">{hasPending(lead.id) ? "Requested" : <><Send size={11} /> Request</>}</button>
+                        ) : (
+                          <button onClick={() => { setApprovePreset(null); setApproveLead(lead); }} className="text-xs text-emerald-400 hover:text-emerald-300 transition-colors">Approve</button>
+                        )}
                         <span className="text-[var(--tx6)]">·</span>
                         <button onClick={() => setResponseModalLead(lead)} className={cn("text-xs transition-colors", resp ? rCfg!.text : "text-[var(--tx5)] hover:text-[var(--tx3)]")}>{resp ? "Response ✓" : "Response"}</button>
                         <span className="text-[var(--tx6)]">·</span>
@@ -651,6 +809,7 @@ export default function LeadsPage() {
             </tbody>
           </table>
         </div>
+        )}
       </div>
 
       {/* ── Lead detail modal ── */}
@@ -676,6 +835,10 @@ export default function LeadsPage() {
               <div className="flex items-center gap-3 p-2.5 bg-[var(--surface2)] rounded-lg"><Zap size={13} className="text-violet-400 shrink-0" /><div><p className="text-[10px] text-[var(--tx5)] mb-0.5">Source</p><p className="text-[var(--tx3)] text-xs">{sourceLabels[viewLead.source] ?? viewLead.source}</p></div></div>
               <div className="flex items-center gap-3 p-2.5 bg-[var(--surface2)] rounded-lg"><Calendar size={13} className="text-[var(--tx5)] shrink-0" /><div><p className="text-[10px] text-[var(--tx5)] mb-0.5">Created</p><p className="text-[var(--tx3)] text-xs">{viewLead.created_at}</p></div></div>
               <div className="flex items-center gap-3 p-2.5 bg-[var(--surface2)] rounded-lg"><Tag size={13} className="text-[var(--tx5)] shrink-0" /><div><p className="text-[10px] text-[var(--tx5)] mb-0.5">Lead ID</p><p className="text-[var(--tx3)] text-xs font-mono">#{viewLead.id.padStart(4, "0")}</p></div></div>
+              {viewLead.date_of_birth && <div className="flex items-center gap-3 p-2.5 bg-[var(--surface2)] rounded-lg"><Cake size={13} className="text-pink-400 shrink-0" /><div><p className="text-[10px] text-[var(--tx5)] mb-0.5">Date of Birth</p><p className="text-[var(--tx3)] text-xs">{viewLead.date_of_birth}</p></div></div>}
+              {viewLead.address && <div className="flex items-center gap-3 p-2.5 bg-[var(--surface2)] rounded-lg"><MapPin size={13} className="text-rose-400 shrink-0" /><div><p className="text-[10px] text-[var(--tx5)] mb-0.5">Address</p><p className="text-[var(--tx3)] text-xs">{viewLead.address}</p></div></div>}
+              {viewLead.linkedin && <a href={viewLead.linkedin.startsWith("http") ? viewLead.linkedin : `https://${viewLead.linkedin}`} target="_blank" rel="noreferrer" className="flex items-center gap-3 p-2.5 bg-[var(--surface2)] rounded-lg hover:bg-[var(--surface3)] transition-colors group"><Link size={13} className="text-sky-400 shrink-0" /><span className="text-[var(--tx3)] text-xs truncate group-hover:text-[var(--tx1)] transition-colors">{viewLead.linkedin}</span></a>}
+              {viewLead.summary && <div className="flex items-start gap-3 p-2.5 bg-[var(--surface2)] rounded-lg"><FileText size={13} className="text-[var(--tx5)] shrink-0 mt-0.5" /><div><p className="text-[10px] text-[var(--tx5)] mb-0.5">Summary / About</p><p className="text-[var(--tx3)] text-xs leading-relaxed whitespace-pre-wrap">{viewLead.summary}</p></div></div>}
             </div>
 
             {/* Response section */}
@@ -714,13 +877,22 @@ export default function LeadsPage() {
             {canWrite && (
             <div className="px-5 py-4 border-b border-[var(--border)]">
               <div className="grid grid-cols-2 gap-2">
-                <button onClick={() => { setApprovePreset(null); setApproveLead(viewLead); setViewLead(null); }} className="py-2 bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs rounded-lg hover:bg-emerald-500/20 transition-colors font-medium">✓ Approve</button>
+                {restricted ? (
+                  <button onClick={() => handleRequestApproval(viewLead)} disabled={hasPending(viewLead.id)} className="py-2 bg-amber-500/10 border border-amber-500/30 text-amber-400 text-xs rounded-lg hover:bg-amber-500/20 transition-colors font-medium flex items-center justify-center gap-1.5 disabled:opacity-50 disabled:cursor-default"><Send size={13} /> {hasPending(viewLead.id) ? "Requested" : "Request Approval"}</button>
+                ) : (
+                  <button onClick={() => { setApprovePreset(null); setApproveLead(viewLead); setViewLead(null); }} className="py-2 bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs rounded-lg hover:bg-emerald-500/20 transition-colors font-medium">✓ Approve</button>
+                )}
                 <button onClick={() => handleReject(viewLead.id)}  className="py-2 bg-rose-500/10 border border-rose-500/30 text-rose-400 text-xs rounded-lg hover:bg-rose-500/20 transition-colors font-medium">✕ Reject</button>
                 <button onClick={() => startEditLead(viewLead)} className="py-2 bg-[var(--surface2)] border border-[var(--border)] text-[var(--tx4)] text-xs rounded-lg hover:border-[var(--a-border)] transition-colors col-span-2 flex items-center justify-center gap-2"><Pencil size={13} /> Edit Lead</button>
                 <button onClick={() => handleToggleFlag(viewLead)} className={cn("py-2 text-xs rounded-lg transition-colors font-medium border col-span-2 flex items-center justify-center gap-2", viewLead.flagged ? "bg-[var(--surface2)] border-[var(--border)] text-[var(--tx4)] hover:border-[var(--a-border)]" : "bg-rose-500/10 border-rose-500/30 text-rose-400 hover:bg-rose-500/20")}><Flag size={13} /> {viewLead.flagged ? "Remove Incorrect Flag" : "Flag as Incorrect"}</button>
               </div>
             </div>
             )}
+
+            {/* Notes */}
+            <div className="px-5 py-4 border-b border-[var(--border)]">
+              <NotesSection entityType="lead" entityId={viewLead.id} entityName={`${viewLead.first_name} ${viewLead.last_name}`} canWrite={canWrite} />
+            </div>
 
             {/* Activity timeline */}
             <div className="px-5 py-4 flex-1">
@@ -745,7 +917,7 @@ export default function LeadsPage() {
       {/* ── Add Lead modal ── */}
       {showAddModal && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50">
-          <div className="bg-[var(--surface)] border border-[var(--border)] rounded-2xl p-6 w-full max-w-md mx-4 shadow-2xl">
+          <div className="bg-[var(--surface)] border border-[var(--border)] rounded-2xl p-6 w-full max-w-md mx-4 shadow-2xl max-h-[88vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-5">
               <h3 className="text-[var(--tx1)] font-semibold">Add Lead</h3>
               <button onClick={() => setShowAddModal(false)} className="text-[var(--tx5)] hover:text-[var(--tx3)]"><X size={16} /></button>
@@ -758,6 +930,12 @@ export default function LeadsPage() {
               <div><label className={labelCls}>Email *</label><input type="email" className={inputCls} placeholder="jane@example.com" value={addForm.email} onChange={e => setAddForm(f => ({ ...f, email: e.target.value }))} /></div>
               <div><label className={labelCls}>Phone</label><input type="tel" className={inputCls} placeholder="+1 555 000 0000" value={addForm.phone} onChange={e => setAddForm(f => ({ ...f, phone: e.target.value }))} /></div>
               <div><label className={labelCls}>Company</label><input className={inputCls} placeholder="Acme Corp" value={addForm.company_name} onChange={e => setAddForm(f => ({ ...f, company_name: e.target.value }))} /></div>
+              <div className="grid grid-cols-2 gap-3">
+                <div><label className={labelCls}>Date of Birth</label><input type="date" className={cn(inputCls, "[color-scheme:dark]")} value={addForm.date_of_birth} onChange={e => setAddForm(f => ({ ...f, date_of_birth: e.target.value }))} /></div>
+                <div><label className={labelCls}>LinkedIn</label><input className={inputCls} placeholder="linkedin.com/in/…" value={addForm.linkedin} onChange={e => setAddForm(f => ({ ...f, linkedin: e.target.value }))} /></div>
+              </div>
+              <div><label className={labelCls}>Address</label><input className={inputCls} placeholder="City, Country" value={addForm.address} onChange={e => setAddForm(f => ({ ...f, address: e.target.value }))} /></div>
+              <div><label className={labelCls}>Summary / About</label><textarea rows={3} className={cn(inputCls, "resize-none")} placeholder="Interests, hobbies, background… (AI-scraped later)" value={addForm.summary} onChange={e => setAddForm(f => ({ ...f, summary: e.target.value }))} /></div>
               <div className="grid grid-cols-2 gap-3">
                 <div><label className={labelCls}>Source</label><select className={inputCls} value={addForm.source} onChange={e => setAddForm(f => ({ ...f, source: e.target.value }))}><option value="inbound_web">Web Form</option><option value="n8n_apify">Apify / LinkedIn</option><option value="manual_ocr">Business Card</option></select></div>
                 <div><label className={labelCls}>Status</label><select className={inputCls} value={addForm.status} onChange={e => setAddForm(f => ({ ...f, status: e.target.value }))}><option value="new">New</option><option value="reviewing">Reviewing</option><option value="approved">Approved</option><option value="rejected">Rejected</option></select></div>
@@ -779,7 +957,7 @@ export default function LeadsPage() {
           createAccount={createAccount}
           createContact={createContact}
           onApproved={handleApproved}
-          onClose={() => { setApproveLead(null); setApprovePreset(null); }}
+          onClose={() => { setApproveLead(null); setApprovePreset(null); setActiveRequestId(null); }}
           initialAddAccount={approvePreset ? approvePreset.account : true}
           initialAddContact={approvePreset ? approvePreset.contact : true}
           autoStart={!!approvePreset}
@@ -789,7 +967,7 @@ export default function LeadsPage() {
       {/* Edit Lead modal */}
       {editLead && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[60]" onClick={() => setEditLead(null)}>
-          <div className="bg-[var(--surface)] border border-[var(--border)] rounded-2xl p-6 w-full max-w-md mx-4 shadow-2xl" onClick={e => e.stopPropagation()}>
+          <div className="bg-[var(--surface)] border border-[var(--border)] rounded-2xl p-6 w-full max-w-md mx-4 shadow-2xl max-h-[88vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
             <div className="flex items-center justify-between mb-5">
               <h3 className="text-[var(--tx1)] font-semibold">Edit Lead</h3>
               <button onClick={() => setEditLead(null)} className="text-[var(--tx5)] hover:text-[var(--tx3)]"><X size={16} /></button>
@@ -802,6 +980,12 @@ export default function LeadsPage() {
               <div><label className={labelCls}>Email *</label><input type="email" className={inputCls} value={editForm.email} onChange={e => setEditForm(f => ({ ...f, email: e.target.value }))} /></div>
               <div><label className={labelCls}>Phone</label><input type="tel" className={inputCls} value={editForm.phone} onChange={e => setEditForm(f => ({ ...f, phone: e.target.value }))} /></div>
               <div><label className={labelCls}>Company</label><input className={inputCls} value={editForm.company_name} onChange={e => setEditForm(f => ({ ...f, company_name: e.target.value }))} /></div>
+              <div className="grid grid-cols-2 gap-3">
+                <div><label className={labelCls}>Date of Birth</label><input type="date" className={cn(inputCls, "[color-scheme:dark]")} value={editForm.date_of_birth} onChange={e => setEditForm(f => ({ ...f, date_of_birth: e.target.value }))} /></div>
+                <div><label className={labelCls}>LinkedIn</label><input className={inputCls} placeholder="linkedin.com/in/…" value={editForm.linkedin} onChange={e => setEditForm(f => ({ ...f, linkedin: e.target.value }))} /></div>
+              </div>
+              <div><label className={labelCls}>Address</label><input className={inputCls} placeholder="City, Country" value={editForm.address} onChange={e => setEditForm(f => ({ ...f, address: e.target.value }))} /></div>
+              <div><label className={labelCls}>Summary / About</label><textarea rows={3} className={cn(inputCls, "resize-none")} placeholder="Interests, hobbies, background…" value={editForm.summary} onChange={e => setEditForm(f => ({ ...f, summary: e.target.value }))} /></div>
               <div className="grid grid-cols-2 gap-3">
                 <div><label className={labelCls}>Source</label><select className={inputCls} value={editForm.source} onChange={e => setEditForm(f => ({ ...f, source: e.target.value }))}><option value="inbound_web">Web Form</option><option value="n8n_apify">Apify / LinkedIn</option><option value="manual_ocr">Business Card</option></select></div>
                 <div><label className={labelCls}>Status</label><select className={inputCls} value={editForm.status} onChange={e => setEditForm(f => ({ ...f, status: e.target.value }))}><option value="new">New</option><option value="reviewing">Reviewing</option><option value="approved">Approved</option><option value="rejected">Rejected</option></select></div>

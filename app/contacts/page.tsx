@@ -9,13 +9,21 @@ import { cn } from "@/lib/utils";
 import ColorFilter, { type ColorFilterValue, type RecordColor } from "@/components/ColorFilter";
 import { usePermissions } from "@/contexts/PermissionsContext";
 import NoAccess from "@/components/NoAccess";
+import NotesSection from "@/components/NotesSection";
+import { MapPin, Link, Cake, FileText } from "lucide-react";
 
-type Contact = (typeof mockContacts)[0] & { flagged?: boolean };
+type Contact = (typeof mockContacts)[0] & {
+  flagged?:       boolean;
+  date_of_birth?: string;
+  address?:       string;
+  linkedin?:      string;
+  summary?:       string;
+};
 
 const inputCls = "w-full px-3 py-2 bg-[var(--surface2)] border border-[var(--border)] rounded-lg text-[var(--tx2)] text-xs placeholder:text-[var(--tx6)] focus:outline-none focus:border-[var(--a-border)] transition-colors";
 const labelCls = "block text-[var(--tx5)] text-xs font-medium mb-1";
 
-const EMPTY_FORM = { first_name: "", last_name: "", job_title: "", account_name: "", email: "", phone: "" };
+const EMPTY_FORM = { first_name: "", last_name: "", job_title: "", account_name: "", email: "", phone: "", date_of_birth: "", address: "", linkedin: "", summary: "" };
 
 // A contact may be missing details (yellow) or flagged as incorrect (red).
 // first_name / email are always present, so they don't count toward "missing".
@@ -64,13 +72,17 @@ export default function ContactsPage() {
   function handleAddContact() {
     if (!addForm.first_name.trim() || !addForm.email.trim()) return;
     createContact({
-      account_id:   "",
-      first_name:   addForm.first_name.trim(),
-      last_name:    addForm.last_name.trim(),
-      email:        addForm.email.trim(),
-      phone:        addForm.phone.trim(),
-      job_title:    addForm.job_title.trim(),
-      account_name: addForm.account_name.trim(),
+      account_id:    "",
+      first_name:    addForm.first_name.trim(),
+      last_name:     addForm.last_name.trim(),
+      email:         addForm.email.trim(),
+      phone:         addForm.phone.trim(),
+      job_title:     addForm.job_title.trim(),
+      account_name:  addForm.account_name.trim(),
+      date_of_birth: addForm.date_of_birth,
+      address:       addForm.address.trim(),
+      linkedin:      addForm.linkedin.trim(),
+      summary:       addForm.summary.trim(),
     });
     setAddForm(EMPTY_FORM);
     setShowAddModal(false);
@@ -80,12 +92,16 @@ export default function ContactsPage() {
   function startEdit() {
     if (!selected) return;
     setEditForm({
-      first_name:   selected.first_name,
-      last_name:    selected.last_name,
-      job_title:    selected.job_title ?? "",
-      account_name: selected.account_name ?? "",
-      email:        selected.email,
-      phone:        selected.phone ?? "",
+      first_name:    selected.first_name,
+      last_name:     selected.last_name,
+      job_title:     selected.job_title ?? "",
+      account_name:  selected.account_name ?? "",
+      email:         selected.email,
+      phone:         selected.phone ?? "",
+      date_of_birth: selected.date_of_birth ?? "",
+      address:       selected.address ?? "",
+      linkedin:      selected.linkedin ?? "",
+      summary:       selected.summary ?? "",
     });
     setEditing(true);
   }
@@ -93,12 +109,16 @@ export default function ContactsPage() {
   function handleSaveEdit() {
     if (!selected || !editForm.first_name.trim() || !editForm.email.trim()) return;
     const patch = {
-      first_name:   editForm.first_name.trim(),
-      last_name:    editForm.last_name.trim(),
-      job_title:    editForm.job_title.trim(),
-      account_name: editForm.account_name.trim(),
-      email:        editForm.email.trim(),
-      phone:        editForm.phone.trim(),
+      first_name:    editForm.first_name.trim(),
+      last_name:     editForm.last_name.trim(),
+      job_title:     editForm.job_title.trim(),
+      account_name:  editForm.account_name.trim(),
+      email:         editForm.email.trim(),
+      phone:         editForm.phone.trim(),
+      date_of_birth: editForm.date_of_birth,
+      address:       editForm.address.trim(),
+      linkedin:      editForm.linkedin.trim(),
+      summary:       editForm.summary.trim(),
     };
     updateContact(selected.id, patch);
     setSelected(prev => (prev ? { ...prev, ...patch } : prev));
@@ -215,6 +235,12 @@ export default function ContactsPage() {
                   <div><label className={labelCls}>Account</label><input className={inputCls} value={editForm.account_name} onChange={e => setEditForm(f => ({ ...f, account_name: e.target.value }))} /></div>
                   <div><label className={labelCls}>Email *</label><input type="email" className={inputCls} value={editForm.email} onChange={e => setEditForm(f => ({ ...f, email: e.target.value }))} /></div>
                   <div><label className={labelCls}>Phone</label><input type="tel" className={inputCls} value={editForm.phone} onChange={e => setEditForm(f => ({ ...f, phone: e.target.value }))} /></div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div><label className={labelCls}>Date of Birth</label><input type="date" className={cn(inputCls, "[color-scheme:dark]")} value={editForm.date_of_birth} onChange={e => setEditForm(f => ({ ...f, date_of_birth: e.target.value }))} /></div>
+                    <div><label className={labelCls}>LinkedIn</label><input className={inputCls} placeholder="linkedin.com/in/…" value={editForm.linkedin} onChange={e => setEditForm(f => ({ ...f, linkedin: e.target.value }))} /></div>
+                  </div>
+                  <div><label className={labelCls}>Address</label><input className={inputCls} placeholder="City, Country" value={editForm.address} onChange={e => setEditForm(f => ({ ...f, address: e.target.value }))} /></div>
+                  <div><label className={labelCls}>Summary / About</label><textarea rows={3} className={cn(inputCls, "resize-none")} placeholder="Interests, hobbies, background…" value={editForm.summary} onChange={e => setEditForm(f => ({ ...f, summary: e.target.value }))} /></div>
                 </div>
                 <div className="flex gap-3">
                   <button onClick={() => setEditing(false)} className="flex-1 py-2.5 bg-[var(--surface2)] border border-[var(--border)] text-[var(--tx4)] text-sm rounded-xl hover:border-[var(--a-border)] transition-colors">Cancel</button>
@@ -232,11 +258,16 @@ export default function ContactsPage() {
                     <Phone size={14} className="text-emerald-400" />
                     <span className="text-[var(--tx3)] text-xs">{selected.phone || "No phone"}</span>
                   </a>
+                  {selected.date_of_birth && <div className="flex items-center gap-3 p-2.5 bg-[var(--surface2)] rounded-lg"><Cake size={14} className="text-pink-400 shrink-0" /><div><p className="text-[10px] text-[var(--tx5)] mb-0.5">Date of Birth</p><p className="text-[var(--tx3)] text-xs">{selected.date_of_birth}</p></div></div>}
+                  {selected.address && <div className="flex items-center gap-3 p-2.5 bg-[var(--surface2)] rounded-lg"><MapPin size={14} className="text-rose-400 shrink-0" /><div><p className="text-[10px] text-[var(--tx5)] mb-0.5">Address</p><p className="text-[var(--tx3)] text-xs">{selected.address}</p></div></div>}
+                  {selected.linkedin && <a href={selected.linkedin.startsWith("http") ? selected.linkedin : `https://${selected.linkedin}`} target="_blank" rel="noreferrer" className="flex items-center gap-3 p-2.5 bg-[var(--surface2)] rounded-lg hover:bg-[var(--surface3)] transition-colors"><Link size={14} className="text-sky-400 shrink-0" /><span className="text-[var(--tx3)] text-xs truncate">{selected.linkedin}</span></a>}
+                  {selected.summary && <div className="flex items-start gap-3 p-2.5 bg-[var(--surface2)] rounded-lg"><FileText size={14} className="text-[var(--tx5)] shrink-0 mt-0.5" /><div><p className="text-[10px] text-[var(--tx5)] mb-0.5">Summary / About</p><p className="text-[var(--tx3)] text-xs leading-relaxed whitespace-pre-wrap">{selected.summary}</p></div></div>}
                 </div>
                 <div className="flex gap-2">
                   {canWrite && <button onClick={() => { setLogType("call_log"); setShowLogModal(true); }} className="flex-1 py-2 bg-[var(--a-muted)] border border-[var(--a-border)] text-[var(--a-text)] text-xs rounded-lg hover:bg-[var(--a-muted)] transition-colors">Log Call</button>}
                   <button onClick={() => window.open(`mailto:${selected.email}`, "_blank")} className="flex-1 py-2 bg-[var(--surface2)] border border-[var(--border)] text-[var(--tx4)] text-xs rounded-lg hover:border-[var(--a-border)] transition-colors">Send Email</button>
                 </div>
+                <NotesSection entityType="contact" entityId={selected.id} entityName={`${selected.first_name} ${selected.last_name}`} canWrite={canWrite} />
                 <div>
                   <p className="text-[var(--tx5)] text-xs font-medium mb-3">Activity Timeline</p>
                   {relatedActivities.length === 0 ? (
@@ -301,7 +332,7 @@ export default function ContactsPage() {
       {/* ── Add Contact modal ── */}
       {showAddModal && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50">
-          <div className="bg-[var(--surface)] border border-[var(--border)] rounded-2xl p-6 w-full max-w-md mx-4 shadow-2xl">
+          <div className="bg-[var(--surface)] border border-[var(--border)] rounded-2xl p-6 w-full max-w-md mx-4 shadow-2xl max-h-[88vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-5">
               <h3 className="text-[var(--tx1)] font-semibold">Add Contact</h3>
               <button onClick={() => setShowAddModal(false)} className="text-[var(--tx5)] hover:text-[var(--tx3)]"><X size={16} /></button>
@@ -315,6 +346,12 @@ export default function ContactsPage() {
               <div><label className={labelCls}>Account</label><input className={inputCls} placeholder="Acme Corp" value={addForm.account_name} onChange={e => setAddForm(f => ({ ...f, account_name: e.target.value }))} /></div>
               <div><label className={labelCls}>Email *</label><input type="email" className={inputCls} placeholder="jane@acme.com" value={addForm.email} onChange={e => setAddForm(f => ({ ...f, email: e.target.value }))} /></div>
               <div><label className={labelCls}>Phone</label><input type="tel" className={inputCls} placeholder="+1 555 000 0000" value={addForm.phone} onChange={e => setAddForm(f => ({ ...f, phone: e.target.value }))} /></div>
+              <div className="grid grid-cols-2 gap-3">
+                <div><label className={labelCls}>Date of Birth</label><input type="date" className={cn(inputCls, "[color-scheme:dark]")} value={addForm.date_of_birth} onChange={e => setAddForm(f => ({ ...f, date_of_birth: e.target.value }))} /></div>
+                <div><label className={labelCls}>LinkedIn</label><input className={inputCls} placeholder="linkedin.com/in/…" value={addForm.linkedin} onChange={e => setAddForm(f => ({ ...f, linkedin: e.target.value }))} /></div>
+              </div>
+              <div><label className={labelCls}>Address</label><input className={inputCls} placeholder="City, Country" value={addForm.address} onChange={e => setAddForm(f => ({ ...f, address: e.target.value }))} /></div>
+              <div><label className={labelCls}>Summary / About</label><textarea rows={3} className={cn(inputCls, "resize-none")} placeholder="Interests, hobbies, background… (AI-scraped later)" value={addForm.summary} onChange={e => setAddForm(f => ({ ...f, summary: e.target.value }))} /></div>
             </div>
             <div className="flex gap-3 mt-6">
               <button onClick={() => { setShowAddModal(false); setAddForm(EMPTY_FORM); }} className="flex-1 py-2.5 bg-[var(--surface2)] border border-[var(--border)] text-[var(--tx4)] text-sm rounded-xl hover:border-[var(--a-border)] transition-colors">Cancel</button>

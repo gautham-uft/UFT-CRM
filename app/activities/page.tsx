@@ -2,11 +2,17 @@
 
 import { useState } from "react";
 import { mockAccounts, mockContacts, mockDeals } from "@/lib/mock-data";
-import { Plus, CheckCircle } from "lucide-react";
+import { Plus, CheckCircle, Trash2, X } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { useAppData } from "@/contexts/AppDataContext";
+import { useAppData, type ActivityItem } from "@/contexts/AppDataContext";
 import { usePermissions } from "@/contexts/PermissionsContext";
+import { useCurrentUser } from "@/contexts/CurrentUserContext";
+import { useCollection } from "@/hooks/useCollection";
+import { isRestrictedRole, roleRank } from "@/lib/permissions";
 import NoAccess from "@/components/NoAccess";
+import SearchableSelect from "@/components/SearchableSelect";
+
+type AppUser = { id: string; first_name: string; last_name: string; role: string };
 
 const activityIcons: Record<string, string> = {
   call_log: "📞", email: "✉️", note: "📝", meeting: "📅",
@@ -30,11 +36,26 @@ const RELATED_OPTIONS = [
 ];
 
 export default function ActivitiesPage() {
-  const { activities, addActivity } = useAppData();
+  const { activities, addActivity, deleteActivity } = useAppData();
   const { ready, canRead, canWrite: cw } = usePermissions();
+  const { currentUser } = useCurrentUser();
+  const { items: users } = useCollection<AppUser>("users");
   const canWrite = cw("Activities");
+  // Executives only see activities they created; everyone else sees all.
+  const restricted = isRestrictedRole(currentUser.role);
+  const userName = `${currentUser.first_name} ${currentUser.last_name}`.trim();
+  const myRank = roleRank(currentUser.role);
 
-  const [filter,     setFilter]     = useState("all");
+  // A user may delete an activity they created, or one created by someone
+  // strictly below them in the hierarchy (Director > BM > AM > Executive).
+  function canDelete(a: ActivityItem): boolean {
+    if (a.user === userName) return true;
+    const creator = users.find(u => `${u.first_name} ${u.last_name}`.trim() === a.user);
+    return roleRank(creator?.role ?? "") < myRank;
+  }
+
+  const [filter,      setFilter]      = useState("all");
+  const [deleteTarget, setDeleteTarget] = useState<ActivityItem | null>(null);
   const [showModal,  setShowModal]  = useState(false);
   const [logType,    setLogType]    = useState<"call_log" | "email" | "note" | "meeting">("call_log");
   const [logRelated, setLogRelated] = useState(RELATED_OPTIONS[0].label);
@@ -43,7 +64,8 @@ export default function ActivitiesPage() {
 
   function showToast(msg: string) { setToast(msg); setTimeout(() => setToast(""), 3000); }
 
-  const filtered = filter === "all" ? activities : activities.filter(a => a.activity_type === filter);
+  const scoped = restricted ? activities.filter(a => a.user === userName) : activities;
+  const filtered = filter === "all" ? scoped : scoped.filter(a => a.activity_type === filter);
 
   function handleSaveActivity() {
     if (!logNote.trim()) return;
@@ -98,7 +120,12 @@ export default function ActivitiesPage() {
                     <span className={cn("text-xs font-medium", entityColors[a.entity_type])}>{a.entity_name}</span>
                     <span className="text-[var(--tx6)] text-xs capitalize">({a.entity_type})</span>
                   </div>
-                  <span className="text-[var(--tx6)] text-xs shrink-0">{new Date(a.created_at).toLocaleString()}</span>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <span className="text-[var(--tx6)] text-xs">{new Date(a.created_at).toLocaleString()}</span>
+                    {canDelete(a) && (
+                      <button onClick={() => setDeleteTarget(a)} title="Delete activity" className="text-[var(--tx5)] hover:text-rose-400 transition-colors"><Trash2 size={13} /></button>
+                    )}
+                  </div>
                 </div>
                 <p className="text-[var(--tx3)] text-sm leading-relaxed">{a.description}</p>
                 <p className="text-[var(--tx6)] text-xs mt-2">by {a.user}</p>
@@ -128,9 +155,12 @@ export default function ActivitiesPage() {
               </div>
               <div>
                 <label className="text-[var(--tx5)] text-xs block mb-1">Related To</label>
-                <select className="w-full bg-[var(--surface2)] border border-[var(--border)] text-[var(--tx3)] text-sm rounded-lg px-3 py-2 focus:outline-none focus:border-[var(--a-border)]" value={logRelated} onChange={e => setLogRelated(e.target.value)}>
-                  {RELATED_OPTIONS.map(o => <option key={o.label} value={o.label}>{o.label}</option>)}
-                </select>
+                <SearchableSelect
+                  value={logRelated}
+                  onChange={setLogRelated}
+                  placeholder="Select record"
+                  options={RELATED_OPTIONS.map(o => ({ value: o.label, label: o.label }))}
+                />
               </div>
               <div>
                 <label className="text-[var(--tx5)] text-xs block mb-1">Notes *</label>
@@ -140,6 +170,23 @@ export default function ActivitiesPage() {
             <div className="flex gap-3 mt-4">
               <button onClick={() => { setShowModal(false); setLogNote(""); }} className="flex-1 py-2.5 bg-[var(--surface2)] border border-[var(--border)] text-[var(--tx4)] text-sm rounded-xl">Cancel</button>
               <button onClick={handleSaveActivity} disabled={!logNote.trim()} className="flex-1 py-2.5 bg-[var(--a)] text-white text-sm rounded-xl hover:bg-[var(--a-hover)] disabled:opacity-40 disabled:cursor-not-allowed">Save Activity</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Delete activity confirmation ── */}
+      {deleteTarget && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[60]">
+          <div className="bg-[var(--surface)] border border-[var(--border)] rounded-2xl p-6 w-full max-w-sm mx-4 shadow-2xl">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-[var(--tx1)] font-semibold">Delete Activity</h3>
+              <button onClick={() => setDeleteTarget(null)} className="text-[var(--tx5)] hover:text-[var(--tx3)]"><X size={16} /></button>
+            </div>
+            <p className="text-[var(--tx4)] text-sm leading-relaxed">Delete this activity by <span className="text-[var(--tx2)] font-medium">{deleteTarget.user}</span>? This can&apos;t be undone.</p>
+            <div className="flex gap-3 mt-6">
+              <button onClick={() => setDeleteTarget(null)} className="flex-1 py-2.5 bg-[var(--surface2)] border border-[var(--border)] text-[var(--tx4)] text-sm rounded-xl hover:border-[var(--a-border)] transition-colors">Cancel</button>
+              <button onClick={() => { deleteActivity(deleteTarget.id); setDeleteTarget(null); showToast("Activity deleted"); }} className="flex-1 py-2.5 bg-rose-500 text-white text-sm rounded-xl hover:bg-rose-400 font-medium transition-colors">Delete</button>
             </div>
           </div>
         </div>

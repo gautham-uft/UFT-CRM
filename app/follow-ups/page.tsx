@@ -4,11 +4,14 @@ import { useState } from "react";
 import { useAppData, type FollowUpItem } from "@/contexts/AppDataContext";
 import { useNow } from "@/contexts/NowContext";
 import { usePermissions } from "@/contexts/PermissionsContext";
+import { useCurrentUser } from "@/contexts/CurrentUserContext";
+import { useCollection } from "@/hooks/useCollection";
+import { isRestrictedRole } from "@/lib/permissions";
 import NoAccess from "@/components/NoAccess";
 import { cn } from "@/lib/utils";
 import {
-  Phone, Clock, XCircle, CheckCircle, Calendar, Check,
-  Zap, TrendingUp, CalendarClock, Pencil, Trash2, X,
+  Phone, Clock, XCircle, CheckCircle, Calendar, Check, User,
+  Zap, TrendingUp, CalendarClock, Pencil, Trash2, X, Plus, UserCheck,
 } from "lucide-react";
 
 // ── Category config ───────────────────────────────────────────────
@@ -30,6 +33,7 @@ const SRC: Record<string, SrcCfg> = {
   lead:     { label: "Lead",     color: "text-violet-400",  Icon: Zap         },
   deal:     { label: "Deal",     color: "text-emerald-400", Icon: TrendingUp  },
   calendar: { label: "Calendar", color: "text-sky-400",     Icon: CalendarClock },
+  task:     { label: "Task",     color: "text-amber-400",   Icon: UserCheck   },
 };
 
 const inputCls = "w-full px-3 py-2 bg-[var(--surface2)] border border-[var(--border)] rounded-lg text-[var(--tx2)] text-xs placeholder:text-[var(--tx6)] focus:outline-none focus:border-[var(--a-border)] transition-colors";
@@ -85,6 +89,14 @@ function FollowUpCard({ item, onToggle, onEdit, onDelete, canWrite }: { item: Fo
             <p className="text-[var(--tx4)] text-xs leading-relaxed mb-2">{item.note}</p>
           )}
 
+          {(item.assignee || item.assigned_by) && (
+            <p className="flex items-center gap-1 text-[10px] text-amber-400 mb-2">
+              <User size={9} />
+              {item.assignee && `Assigned to ${item.assignee}`}
+              {item.assigned_by && <span className="text-[var(--tx6)]">{item.assignee ? " · " : ""}by {item.assigned_by}</span>}
+            </p>
+          )}
+
           <div className="flex items-center justify-between gap-2">
             {item.follow_up_date ? (
               <span className="flex items-center gap-1 text-[10px] text-[var(--tx5)]">
@@ -110,17 +122,47 @@ function FollowUpCard({ item, onToggle, onEdit, onDelete, canWrite }: { item: Fo
 
 const CATEGORY_OPTIONS = ["callback", "postponed", "not_interested", "progressing", "call", "task", "deadline"];
 
+type AppUser = { id: string; first_name: string; last_name: string; role: string };
+
 export default function FollowUpsPage() {
-  const { followUps, toggleFollowUp, updateFollowUp, deleteFollowUp } = useAppData();
-  const { today } = useNow();
+  const { followUps, addFollowUp, toggleFollowUp, updateFollowUp, deleteFollowUp } = useAppData();
+  const { today, now } = useNow();
   const { ready, canRead, canWrite: cw } = usePermissions();
+  const { currentUser } = useCurrentUser();
+  const { items: users } = useCollection<AppUser>("users");
   const canWrite = cw("Follow-ups");
+  const restricted = isRestrictedRole(currentUser.role);
+  const userName = `${currentUser.first_name} ${currentUser.last_name}`.trim();
+  // Executives can be assigned tasks but can't assign them.
+  const canAssign = !restricted && canWrite;
+  const executives = users.filter(u => isRestrictedRole(u.role));
 
   const [editItem, setEditItem] = useState<FollowUpItem | null>(null);
   const [editForm, setEditForm] = useState({ entity_name: "", category: "callback", note: "", follow_up_date: "" });
+  const [showAssign, setShowAssign] = useState(false);
+  const [assignForm, setAssignForm] = useState({ assignee: "", title: "", note: "", follow_up_date: "" });
   const [toast, setToast] = useState("");
 
   function showToast(msg: string) { setToast(msg); setTimeout(() => setToast(""), 3000); }
+
+  function handleAssignTask() {
+    if (!assignForm.assignee || !assignForm.title.trim()) return;
+    addFollowUp({
+      source:         "task",
+      source_id:      `task-${Date.now()}-${Math.floor(Math.random() * 1e6)}`,
+      entity_name:    assignForm.title.trim(),
+      category:       "task",
+      note:           assignForm.note.trim() || undefined,
+      follow_up_date: assignForm.follow_up_date || undefined,
+      logged_at:      now ? new Date(now).toISOString() : new Date().toISOString(),
+      done:           false,
+      assignee:       assignForm.assignee,
+      assigned_by:    userName,
+    });
+    setAssignForm({ assignee: "", title: "", note: "", follow_up_date: "" });
+    setShowAssign(false);
+    showToast(`Task assigned to ${assignForm.assignee}`);
+  }
 
   function startEdit(item: FollowUpItem) {
     setEditForm({
@@ -152,12 +194,14 @@ export default function FollowUpsPage() {
 
   const weekEnd = addDays(today, 7);
 
-  const pending  = followUps.filter(f => !f.done);
+  // Executives only see the tasks assigned to them; everyone else sees all.
+  const visible  = restricted ? followUps.filter(f => f.assignee === userName) : followUps;
+  const pending  = visible.filter(f => !f.done);
   const overdue  = pending.filter(f => f.follow_up_date && f.follow_up_date < today);
   const dueToday = pending.filter(f => f.follow_up_date === today);
   const thisWeek = pending.filter(f => f.follow_up_date && f.follow_up_date > today && f.follow_up_date <= weekEnd);
   const upcoming = pending.filter(f => !f.follow_up_date || f.follow_up_date > weekEnd);
-  const done     = followUps.filter(f => f.done);
+  const done     = visible.filter(f => f.done);
 
   const sections = [
     { key: "overdue",  label: "Overdue",   items: overdue,  dotCls: "bg-rose-400",          headCls: "text-rose-400"          },
@@ -171,6 +215,16 @@ export default function FollowUpsPage() {
 
   return (
     <div className="space-y-6">
+
+      {/* Assign task (managers) */}
+      {canAssign && (
+        <div className="flex items-center justify-between">
+          <span className="text-[var(--tx5)] text-sm">{pending.length} pending</span>
+          <button onClick={() => setShowAssign(true)} className="flex items-center gap-2 px-3 py-1.5 bg-[var(--a)] text-white text-xs rounded-lg hover:bg-[var(--a-hover)] transition-colors">
+            <Plus size={13} /> Assign Task
+          </button>
+        </div>
+      )}
 
       {/* Stats row */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
@@ -241,6 +295,43 @@ export default function FollowUpsPage() {
               <button onClick={() => handleDelete(editItem)} className="flex items-center justify-center gap-2 py-2.5 px-4 bg-rose-500/10 border border-rose-500/30 text-rose-400 text-sm rounded-xl hover:bg-rose-500/20 transition-colors"><Trash2 size={14} /></button>
               <button onClick={() => setEditItem(null)} className="flex-1 py-2.5 bg-[var(--surface2)] border border-[var(--border)] text-[var(--tx4)] text-sm rounded-xl hover:border-[var(--a-border)] transition-colors">Cancel</button>
               <button onClick={handleSaveEdit} disabled={!editForm.entity_name.trim()} className="flex-1 py-2.5 bg-[var(--a)] text-white text-sm rounded-xl hover:bg-[var(--a-hover)] font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed">Save Changes</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Assign Task modal ── */}
+      {showAssign && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50" onClick={() => setShowAssign(false)}>
+          <div className="bg-[var(--surface)] border border-[var(--border)] rounded-2xl p-6 w-full max-w-md mx-4 shadow-2xl" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-5">
+              <h3 className="text-[var(--tx1)] font-semibold">Assign Task</h3>
+              <button onClick={() => setShowAssign(false)} className="text-[var(--tx5)] hover:text-[var(--tx3)]"><X size={16} /></button>
+            </div>
+            <div className="space-y-4">
+              <div>
+                <label className={labelCls}>Assign to (Executive)</label>
+                {executives.length === 0 ? (
+                  <p className="text-[var(--tx5)] text-xs px-3 py-2 bg-[var(--surface2)] border border-dashed border-[var(--border)] rounded-lg">
+                    No Executive users yet. Add one in Settings → Users.
+                  </p>
+                ) : (
+                  <select className={inputCls} value={assignForm.assignee} onChange={e => setAssignForm(f => ({ ...f, assignee: e.target.value }))}>
+                    <option value="">Select an executive</option>
+                    {executives.map(u => {
+                      const name = `${u.first_name} ${u.last_name}`.trim();
+                      return <option key={u.id} value={name}>{name}</option>;
+                    })}
+                  </select>
+                )}
+              </div>
+              <div><label className={labelCls}>Task *</label><input className={inputCls} placeholder="e.g. Follow up with TechWave" value={assignForm.title} onChange={e => setAssignForm(f => ({ ...f, title: e.target.value }))} /></div>
+              <div><label className={labelCls}>Due Date</label><input type="date" className={cn(inputCls, "[color-scheme:dark]")} value={assignForm.follow_up_date} onChange={e => setAssignForm(f => ({ ...f, follow_up_date: e.target.value }))} /></div>
+              <div><label className={labelCls}>Note</label><textarea rows={3} className={inputCls} style={{ resize: "none" }} placeholder="Details for the executive…" value={assignForm.note} onChange={e => setAssignForm(f => ({ ...f, note: e.target.value }))} /></div>
+            </div>
+            <div className="flex gap-3 mt-6">
+              <button onClick={() => setShowAssign(false)} className="flex-1 py-2.5 bg-[var(--surface2)] border border-[var(--border)] text-[var(--tx4)] text-sm rounded-xl hover:border-[var(--a-border)] transition-colors">Cancel</button>
+              <button onClick={handleAssignTask} disabled={!assignForm.assignee || !assignForm.title.trim()} className="flex-1 py-2.5 bg-[var(--a)] text-white text-sm rounded-xl hover:bg-[var(--a-hover)] font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed">Assign</button>
             </div>
           </div>
         </div>

@@ -20,14 +20,14 @@ export type CurrentUser = {
 };
 
 // The built-in default identity, always available even before any users are
-// created in Settings. Its id matches the seeded "admin" user so the Dev Tools
-// switcher shows it once, not twice.
+// created in Settings. Its id matches the seeded "director" user so the Dev
+// Tools switcher shows it once, not twice.
 export const DEFAULT_USER: CurrentUser = {
-  id:         "admin",
-  first_name: "Admin",
+  id:         "director",
+  first_name: "Director",
   last_name:  "",
-  email:      "admin@uftech.com",
-  role:       "System Admin",
+  email:      "director@uftech.com",
+  role:       "Director",
 };
 
 const STORAGE_KEY = "uft-current-user";
