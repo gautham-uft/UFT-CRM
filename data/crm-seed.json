@@ -8,7 +8,7 @@
       "phone": "+1 555-0101",
       "company_name": "TechWave Inc.",
       "source": "n8n_apify",
-      "status": "approved",
+      "status": "new",
       "created_at": "2026-05-20"
     },
     {
@@ -19,7 +19,7 @@
       "phone": "+1 555-0102",
       "company_name": "CloudBase Ltd.",
       "source": "manual_ocr",
-      "status": "approved",
+      "status": "new",
       "created_at": "2026-05-21"
     },
     {
@@ -30,7 +30,7 @@
       "phone": "+1 555-0103",
       "company_name": "FinSolve",
       "source": "inbound_web",
-      "status": "approved",
+      "status": "new",
       "created_at": "2026-05-22"
     },
     {
@@ -41,7 +41,7 @@
       "phone": "+1 555-0104",
       "company_name": "NexGen AI",
       "source": "n8n_apify",
-      "status": "approved",
+      "status": "new",
       "created_at": "2026-05-22"
     },
     {
@@ -52,7 +52,7 @@
       "phone": "+1 555-0105",
       "company_name": "Vertex Data",
       "source": "n8n_apify",
-      "status": "approved",
+      "status": "new",
       "created_at": "2026-05-23",
       "flagged": false
     },
@@ -86,7 +86,7 @@
       "phone": "+81 90-0011-2233",
       "company_name": "JPTech",
       "source": "n8n_apify",
-      "status": "reviewing",
+      "status": "new",
       "created_at": "2026-05-25"
     },
     {
@@ -130,7 +130,7 @@
       "phone": "+86 138-0011-2233",
       "company_name": "Sino Analytics",
       "source": "n8n_apify",
-      "status": "reviewing",
+      "status": "new",
       "created_at": "2026-05-28"
     },
     {
@@ -196,7 +196,7 @@
       "phone": "+1 555-0118",
       "company_name": "Summit Health",
       "source": "inbound_web",
-      "status": "reviewing",
+      "status": "new",
       "created_at": "2026-06-03"
     },
     {
@@ -226,8 +226,223 @@
   "accounts": [],
   "deals": [],
   "products": [],
-  "users": [],
-  "roles": [],
+  "users": [
+    {
+      "id": "admin",
+      "first_name": "Admin",
+      "last_name": "",
+      "email": "admin@uftech.com",
+      "role": "System Admin",
+      "is_active": true,
+      "last_login": "Never"
+    },
+    {
+      "id": "natesh",
+      "first_name": "Natesh",
+      "last_name": "N S",
+      "email": "natesh.ns@uftech.com",
+      "role": "CEO",
+      "is_active": true,
+      "last_login": "Never"
+    },
+    {
+      "id": "gayathri",
+      "first_name": "Gayathri",
+      "last_name": "Murthy",
+      "email": "gayathri.murthy@uftech.com",
+      "role": "Business Head",
+      "is_active": true,
+      "last_login": "Never"
+    }
+  ],
+  "roles": [
+    {
+      "id": "system-admin",
+      "name": "System Admin",
+      "description": "Full read & write access to every module.",
+      "permissions": [
+        {
+          "module": "Dashboard",
+          "read": true,
+          "write": true
+        },
+        {
+          "module": "Leads",
+          "read": true,
+          "write": true
+        },
+        {
+          "module": "Contacts",
+          "read": true,
+          "write": true
+        },
+        {
+          "module": "Accounts",
+          "read": true,
+          "write": true
+        },
+        {
+          "module": "Deals",
+          "read": true,
+          "write": true
+        },
+        {
+          "module": "Activities",
+          "read": true,
+          "write": true
+        },
+        {
+          "module": "Follow-ups",
+          "read": true,
+          "write": true
+        },
+        {
+          "module": "Business Card",
+          "read": true,
+          "write": true
+        },
+        {
+          "module": "Products",
+          "read": true,
+          "write": true
+        },
+        {
+          "module": "User Management",
+          "read": true,
+          "write": true
+        },
+        {
+          "module": "Roles & Permissions",
+          "read": true,
+          "write": true
+        }
+      ]
+    },
+    {
+      "id": "ceo",
+      "name": "CEO",
+      "description": "Full read & write access to every module.",
+      "permissions": [
+        {
+          "module": "Dashboard",
+          "read": true,
+          "write": true
+        },
+        {
+          "module": "Leads",
+          "read": true,
+          "write": true
+        },
+        {
+          "module": "Contacts",
+          "read": true,
+          "write": true
+        },
+        {
+          "module": "Accounts",
+          "read": true,
+          "write": true
+        },
+        {
+          "module": "Deals",
+          "read": true,
+          "write": true
+        },
+        {
+          "module": "Activities",
+          "read": true,
+          "write": true
+        },
+        {
+          "module": "Follow-ups",
+          "read": true,
+          "write": true
+        },
+        {
+          "module": "Business Card",
+          "read": true,
+          "write": true
+        },
+        {
+          "module": "Products",
+          "read": true,
+          "write": true
+        },
+        {
+          "module": "User Management",
+          "read": true,
+          "write": true
+        },
+        {
+          "module": "Roles & Permissions",
+          "read": true,
+          "write": true
+        }
+      ]
+    },
+    {
+      "id": "business-head",
+      "name": "Business Head",
+      "description": "Full read & write access to every module.",
+      "permissions": [
+        {
+          "module": "Dashboard",
+          "read": true,
+          "write": true
+        },
+        {
+          "module": "Leads",
+          "read": true,
+          "write": true
+        },
+        {
+          "module": "Contacts",
+          "read": true,
+          "write": true
+        },
+        {
+          "module": "Accounts",
+          "read": true,
+          "write": true
+        },
+        {
+          "module": "Deals",
+          "read": true,
+          "write": true
+        },
+        {
+          "module": "Activities",
+          "read": true,
+          "write": true
+        },
+        {
+          "module": "Follow-ups",
+          "read": true,
+          "write": true
+        },
+        {
+          "module": "Business Card",
+          "read": true,
+          "write": true
+        },
+        {
+          "module": "Products",
+          "read": true,
+          "write": true
+        },
+        {
+          "module": "User Management",
+          "read": true,
+          "write": true
+        },
+        {
+          "module": "Roles & Permissions",
+          "read": true,
+          "write": true
+        }
+      ]
+    }
+  ],
   "activities": [],
   "followUps": [],
   "calendarEvents": [],

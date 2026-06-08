@@ -3,6 +3,8 @@
 import { useState } from "react";
 import { Upload, Camera, CheckCircle2, Loader2, CreditCard } from "lucide-react";
 import { createItem } from "@/lib/api";
+import { usePermissions } from "@/contexts/PermissionsContext";
+import NoAccess from "@/components/NoAccess";
 
 const mockParsed = {
   first_name: "Arjun", last_name: "Mehta", job_title: "Chief Technology Officer",
@@ -12,6 +14,8 @@ const mockParsed = {
 type Step = "idle" | "processing" | "review" | "saved";
 
 export default function BusinessCardPage() {
+  const { ready, canRead, canWrite: cw } = usePermissions();
+  const canWrite = cw("Business Card");
   const [step, setStep] = useState<Step>("idle");
   const [form, setForm] = useState(mockParsed);
   const [fileName, setFileName] = useState("");
@@ -43,6 +47,8 @@ export default function BusinessCardPage() {
     setStep("processing");
     setTimeout(() => { setForm(mockParsed); setStep("review"); }, 2200);
   };
+
+  if (ready && !canRead("Business Card")) return <NoAccess module="Business Card" />;
 
   return (
     <div className="max-w-xl mx-auto space-y-5">
@@ -112,7 +118,11 @@ export default function BusinessCardPage() {
           </div>
           <div className="flex gap-3 pt-2">
             <button onClick={() => { setStep("idle"); setFileName(""); }} className="flex-1 py-2.5 bg-[var(--surface2)] border border-[var(--border)] text-[var(--tx4)] text-sm rounded-xl">Retake</button>
-            <button onClick={handleSaveContact} disabled={saving} className="flex-1 py-2.5 bg-[var(--a)] text-white text-sm rounded-xl hover:bg-[var(--a-hover)] font-medium disabled:opacity-60">{saving ? "Saving…" : "Confirm & Save Contact"}</button>
+            {canWrite ? (
+              <button onClick={handleSaveContact} disabled={saving} className="flex-1 py-2.5 bg-[var(--a)] text-white text-sm rounded-xl hover:bg-[var(--a-hover)] font-medium disabled:opacity-60">{saving ? "Saving…" : "Confirm & Save Contact"}</button>
+            ) : (
+              <div className="flex-1 py-2.5 text-center text-[var(--tx5)] text-xs bg-[var(--surface2)] border border-dashed border-[var(--border)] rounded-xl">No permission to save contacts</div>
+            )}
           </div>
         </div>
       )}

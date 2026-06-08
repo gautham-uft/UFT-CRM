@@ -1,6 +1,9 @@
 import { NextResponse } from "next/server";
 import { getOne, updateOne, deleteOne, isCollection } from "@/lib/db";
 
+// Always run on the server and read fresh from the online bin (never cached).
+export const dynamic = "force-dynamic";
+
 type Ctx = { params: Promise<{ collection: string; id: string }> };
 
 // GET /api/leads/:id

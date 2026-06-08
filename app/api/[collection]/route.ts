@@ -1,6 +1,9 @@
 import { NextResponse } from "next/server";
 import { getAll, createOne, replaceAll, isCollection } from "@/lib/db";
 
+// Always run on the server and read fresh from the online bin (never cached).
+export const dynamic = "force-dynamic";
+
 // List a collection: GET /api/leads
 export async function GET(_req: Request, ctx: { params: Promise<{ collection: string }> }) {
   const { collection } = await ctx.params;

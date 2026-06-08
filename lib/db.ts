@@ -1,35 +1,48 @@
 // ─────────────────────────────────────────────────────────────────────────
-// Local JSON "database" for the demo.
+// JSON "database" for the demo — JSONBin.io backed.
 //
-// This is a server-only module. It persists all CRM data to a single JSON
-// file on disk (data/crm-db.json) so that anything stakeholders create / edit
-// / delete in the UI survives reloads, navigation, and server restarts.
+// Server-only module. There are two stores:
 //
-// On first run the file is seeded from lib/mock-data.ts. Delete the file (or
-// POST /api/reset) to start fresh.
+//   1. data/crm-seed.json  — the PERSISTENT baseline. Committed to the repo and
+//      imported at build time; NEVER written to at runtime. Holds the canonical
+//      starting data (leads, users, roles, pipeline stages).
+//
+//   2. A JSONBin.io bin     — the RUNTIME working database. Every read/write
+//      goes through it, so data is durable and shared across all clients/server
+//      instances (works on Vercel, where the filesystem is read-only/ephemeral).
+//      The bin is prefilled with the baseline. POST /api/reset clears it and
+//      copies the seed back in as a fresh starting point.
+//
+// Credentials are read from environment variables (server-side only — never
+// exposed to the browser):
+//   JSONBIN_BIN_ID      — the bin's id
+//   JSONBIN_ACCESS_KEY  — the bin's X-Access-Key
+// Locally these live in .env.local; on Vercel set them in
+// Project Settings → Environment Variables. See .env.example for the template.
 // ─────────────────────────────────────────────────────────────────────────
 
-import { promises as fs } from "fs";
-import path from "path";
-import os from "os";
 import crypto from "crypto";
 
 import { mockPipelineStages } from "./mock-data";
-// The committed snapshot doubles as the seed that ships to production.
-import seedSnapshot from "../data/crm-db.json";
+// File 1: the persistent baseline. Imported so it ships to production.
+import seedSnapshot from "../data/crm-seed.json";
 
-// ── Where the data lives ──────────────────────────────────────────────────
+// ── Where the data lives (JSONBin.io) ──────────────────────────────────────
 
-// Most serverless hosts (Vercel included) make the project filesystem read-only
-// at runtime — only the OS temp dir is writable. So locally we persist to ./data
-// (survives restarts), and on Vercel we fall back to a writable temp location.
-//
-// IMPORTANT: that temp dir is per-instance and ephemeral on Vercel. Data created
-// at runtime resets on cold starts and is NOT shared across instances. That's
-// fine for checking functionality; use a hosted DB for durable, shared data.
-const WRITABLE_FS = !process.env.VERCEL;
-const DATA_DIR = WRITABLE_FS ? path.join(process.cwd(), "data") : path.join(os.tmpdir(), "uft-crm");
-const DB_FILE = path.join(DATA_DIR, "crm-db.json");
+const BIN_ID     = process.env.JSONBIN_BIN_ID     ?? "";
+const ACCESS_KEY = process.env.JSONBIN_ACCESS_KEY ?? "";
+const BIN_URL    = `https://api.jsonbin.io/v3/b/${BIN_ID}`;
+
+const authHeaders = { "Content-Type": "application/json", "X-Access-Key": ACCESS_KEY };
+
+function assertConfigured() {
+  if (!BIN_ID || !ACCESS_KEY) {
+    throw new Error(
+      "JSONBin is not configured. Set JSONBIN_BIN_ID and JSONBIN_ACCESS_KEY in " +
+      ".env.local (local) or the Vercel project environment variables. See .env.example.",
+    );
+  }
+}
 
 // ── Collections ───────────────────────────────────────────────────────────
 
@@ -67,31 +80,31 @@ type DB = Record<CollectionName, Row[]>;
 // not "data", so it is kept — emptying it would break the Deals board.
 const SEED_LEADS: Row[] = [
   { id: "1",  first_name: "James",   last_name: "Carter",    email: "james.carter@techwave.io",    phone: "+1 555-0101",      company_name: "TechWave Inc.",      source: "n8n_apify",   status: "new",       created_at: "2026-05-20" },
-  { id: "2",  first_name: "Priya",   last_name: "Nair",      email: "priya.nair@cloudbase.com",    phone: "+1 555-0102",      company_name: "CloudBase Ltd.",     source: "manual_ocr",  status: "reviewing", created_at: "2026-05-21" },
+  { id: "2",  first_name: "Priya",   last_name: "Nair",      email: "priya.nair@cloudbase.com",    phone: "+1 555-0102",      company_name: "CloudBase Ltd.",     source: "manual_ocr",  status: "new",       created_at: "2026-05-21" },
   { id: "3",  first_name: "Marcus",  last_name: "Webb",      email: "marcus.webb@finsolve.net",    phone: "+1 555-0103",      company_name: "FinSolve",           source: "inbound_web", status: "new",       created_at: "2026-05-22" },
   { id: "4",  first_name: "Sofia",   last_name: "Reyes",     email: "sofia.reyes@nexgen.io",       phone: "+1 555-0104",      company_name: "NexGen AI",          source: "n8n_apify",   status: "new",       created_at: "2026-05-22" },
   { id: "5",  first_name: "Daniel",  last_name: "Kim",       email: "daniel.kim@vertexdata.co",    phone: "+1 555-0105",      company_name: "Vertex Data",        source: "n8n_apify",   status: "new",       created_at: "2026-05-23" },
   { id: "6",  first_name: "Ananya",  last_name: "Gupta",     email: "ananya.gupta@innosoft.in",    phone: "+91 98000-12345",  company_name: "InnoSoft India",     source: "inbound_web", status: "new",       created_at: "2026-05-23" },
   { id: "7",  first_name: "Liam",    last_name: "O'Brien",   email: "liam.obrien@saasly.com",      phone: "+1 555-0107",      company_name: "SaaSly Corp",        source: "manual_ocr",  status: "new",       created_at: "2026-05-24" },
-  { id: "8",  first_name: "Yuki",    last_name: "Tanaka",    email: "yuki.tanaka@jptech.jp",       phone: "+81 90-0011-2233", company_name: "JPTech",             source: "n8n_apify",   status: "reviewing", created_at: "2026-05-25" },
+  { id: "8",  first_name: "Yuki",    last_name: "Tanaka",    email: "yuki.tanaka@jptech.jp",       phone: "+81 90-0011-2233", company_name: "JPTech",             source: "n8n_apify",   status: "new",       created_at: "2026-05-25" },
   { id: "9",  first_name: "Emma",    last_name: "Johnson",   email: "emma.johnson@brightpath.io",  phone: "+1 555-0109",      company_name: "BrightPath Systems", source: "inbound_web", status: "new",       created_at: "2026-05-25" },
   { id: "10", first_name: "Carlos",  last_name: "Mendez",    email: "carlos.mendez@novasoft.io",   phone: "+34 600-112233",   company_name: "NovaSoft Labs",      source: "n8n_apify",   status: "new",       created_at: "2026-05-26" },
   { id: "11", first_name: "Fatima",  last_name: "Al-Sayed",  email: "fatima.alsayed@desertcloud.ae", phone: "+971 50-1234567", company_name: "DesertCloud",      source: "manual_ocr",  status: "new",       created_at: "2026-05-27" },
-  { id: "12", first_name: "Wei",     last_name: "Chen",      email: "wei.chen@sinoanalytics.cn",   phone: "+86 138-0011-2233", company_name: "Sino Analytics",    source: "n8n_apify",   status: "reviewing", created_at: "2026-05-28" },
+  { id: "12", first_name: "Wei",     last_name: "Chen",      email: "wei.chen@sinoanalytics.cn",   phone: "+86 138-0011-2233", company_name: "Sino Analytics",    source: "n8n_apify",   status: "new",       created_at: "2026-05-28" },
   { id: "13", first_name: "Olivia",  last_name: "Brown",     email: "olivia.brown@northwind.com",  phone: "+1 555-0113",      company_name: "Northwind Retail",   source: "inbound_web", status: "new",       created_at: "2026-05-29" },
   { id: "14", first_name: "Raj",     last_name: "Patel",     email: "raj.patel@quantumlog.in",     phone: "+91 99887-76655",  company_name: "Quantum Logistics",  source: "n8n_apify",   status: "new",       created_at: "2026-05-30" },
   { id: "15", first_name: "Hannah",  last_name: "Müller",    email: "hannah.mueller@berlinbyte.de", phone: "+49 30-1234567",  company_name: "BerlinByte GmbH",    source: "manual_ocr",  status: "new",       created_at: "2026-05-31" },
   { id: "16", first_name: "Lucas",   last_name: "Silva",     email: "lucas.silva@amazoniatech.br", phone: "+55 11-91234-5678", company_name: "Amazonia Tech",     source: "inbound_web", status: "new",       created_at: "2026-06-01" },
   { id: "17", first_name: "Grace",   last_name: "Okafor",    email: "grace.okafor@lagosfintech.ng", phone: "+234 80-1234-5678", company_name: "Lagos FinTech",    source: "n8n_apify",   status: "new",       created_at: "2026-06-02" },
-  { id: "18", first_name: "Noah",    last_name: "Williams",  email: "noah.williams@summithealth.com", phone: "+1 555-0118",   company_name: "Summit Health",      source: "inbound_web", status: "reviewing", created_at: "2026-06-03" },
+  { id: "18", first_name: "Noah",    last_name: "Williams",  email: "noah.williams@summithealth.com", phone: "+1 555-0118",   company_name: "Summit Health",      source: "inbound_web", status: "new",       created_at: "2026-06-03" },
   { id: "19", first_name: "Aisha",   last_name: "Khan",      email: "aisha.khan@meridiansol.pk",   phone: "+92 300-1234567",  company_name: "Meridian Solutions", source: "manual_ocr",  status: "new",       created_at: "2026-06-03" },
   { id: "20", first_name: "Tom",     last_name: "Anderson",  email: "tom.anderson@peakscale.com",  phone: "+1 555-0120",      company_name: "PeakScale",          source: "n8n_apify",   status: "new",       created_at: "2026-06-04" },
 ];
 
 function buildSeed(): DB {
-  // Prefer the committed snapshot (data/crm-db.json) so whatever you commit is
-  // what ships and what /api/reset restores. Fall back to the inline defaults
-  // for any collection the snapshot is missing.
+  // Clone the persistent seed (data/crm-seed.json) — this is what every app
+  // open and /api/reset copies into the runtime file. Fall back to the inline
+  // defaults for any collection the seed is missing.
   const snap = seedSnapshot as unknown as Partial<Record<CollectionName, Row[]>>;
   const pick = (name: CollectionName, fallback: Row[]): Row[] =>
     structuredClone(Array.isArray(snap[name]) ? (snap[name] as Row[]) : fallback);
@@ -110,40 +123,57 @@ function buildSeed(): DB {
   };
 }
 
-// ── File access (serialized) ────────────────────────────────────────────--
+// ── Bin access (serialized) ─────────────────────────────────────────────--
 
-// All writes go through this promise chain so concurrent requests can't
-// clobber each other's read-modify-write cycle.
+// All writes go through this promise chain so concurrent requests in the same
+// instance can't clobber each other's read-modify-write cycle. (Across separate
+// serverless instances there is no global lock — fine for a demo.)
 let writeQueue: Promise<unknown> = Promise.resolve();
 
-async function ensureFile(): Promise<void> {
-  try {
-    await fs.access(DB_FILE);
-  } catch {
-    await fs.mkdir(DATA_DIR, { recursive: true });
-    await fs.writeFile(DB_FILE, JSON.stringify(buildSeed(), null, 2), "utf8");
-  }
-}
+// True once we've initialized an empty bin with the seed (per server instance).
+let binBootstrapped = false;
 
+// Read the latest bin contents, backfilling any missing collection from the
+// seed so the app never crashes on a partial bin.
 async function readDB(): Promise<DB> {
-  await ensureFile();
-  const raw = await fs.readFile(DB_FILE, "utf8");
-  const parsed = JSON.parse(raw) as Partial<DB>;
-  // Backfill any collection missing from an older file so the app never
-  // crashes on a stale db.json.
+  assertConfigured();
+  const res = await fetch(`${BIN_URL}/latest`, { headers: authHeaders, cache: "no-store" });
+  if (!res.ok) throw new Error(`JSONBin read failed (${res.status}): ${await res.text().catch(() => "")}`);
+  const json = (await res.json()) as { record?: unknown };
+  const record = (json.record && typeof json.record === "object" ? json.record : {}) as Partial<DB>;
+  // "Empty" = the bin holds none of our collections at all (fresh / uninitialized).
+  // A bin that already has data — even if it differs from the local copy — is
+  // NOT re-seeded; that mismatch surfaces as the indicator for a manual sync.
+  const wasEmpty = !COLLECTIONS.some((name) => Array.isArray(record[name]));
+  const parsed: Partial<DB> = { ...record };
   const seed = buildSeed();
   for (const name of COLLECTIONS) {
     if (!Array.isArray(parsed[name])) parsed[name] = seed[name];
   }
+  // Only a brand-new / empty bin (e.g. a fresh Vercel bin) gets seeded once, so
+  // the cloud becomes the live persistent store. Fire-and-forget; retry on fail.
+  if (wasEmpty && !binBootstrapped) {
+    binBootstrapped = true;
+    writeDB(parsed as DB).catch(() => {
+      binBootstrapped = false;
+    });
+  }
   return parsed as DB;
 }
 
+// Overwrite the entire bin. X-Bin-Versioning:false keeps a single live version
+// rather than accumulating one per write.
 async function writeDB(db: DB): Promise<void> {
-  await fs.mkdir(DATA_DIR, { recursive: true });
-  await fs.writeFile(DB_FILE, JSON.stringify(db, null, 2), "utf8");
+  assertConfigured();
+  const res = await fetch(BIN_URL, {
+    method: "PUT",
+    headers: { ...authHeaders, "X-Bin-Versioning": "false" },
+    body: JSON.stringify(db),
+  });
+  if (!res.ok) throw new Error(`JSONBin write failed (${res.status}): ${await res.text().catch(() => "")}`);
 }
 
-// Run a read-modify-write transaction with exclusive access.
+// Run a read-modify-write transaction with exclusive access (per instance).
 function transaction<T>(fn: (db: DB) => T | Promise<T>): Promise<T> {
   const run = async (): Promise<T> => {
     const db = await readDB();
@@ -158,6 +188,28 @@ function transaction<T>(fn: (db: DB) => T | Promise<T>): Promise<T> {
 }
 
 // ── Public API ────────────────────────────────────────────────────────────
+
+// Whole-database read — used by the offline-first client to pull the entire
+// cloud snapshot in one round trip (and to compare against its local copy).
+export async function getDB(): Promise<DB> {
+  return readDB();
+}
+
+// Whole-database overwrite — used by the "Local → Cloud" sync to push the
+// client's offline copy back to the bin. Missing collections fall back to the
+// seed so the document always stays well-formed.
+export async function putDB(input: Record<string, unknown>): Promise<DB> {
+  const seed = buildSeed();
+  const next = {} as DB;
+  for (const name of COLLECTIONS) {
+    const v = input[name];
+    next[name] = Array.isArray(v) ? (v as Row[]) : seed[name];
+  }
+  const run = () => writeDB(next).then(() => next);
+  const queued = writeQueue.then(run, run);
+  writeQueue = queued.catch(() => undefined);
+  return queued;
+}
 
 export async function getAll(collection: CollectionName): Promise<Row[]> {
   const db = await readDB();
@@ -216,31 +268,13 @@ export async function replaceAll(collection: CollectionName, rows: Row[]): Promi
   });
 }
 
-// Wipe the file and re-seed from mock data.
+// Reset: clear the online bin and copy the persistent seed back in as a fresh
+// starting point. Overwrites unconditionally (no read), so it recovers even if
+// the bin is empty or malformed. Restores the canonical baseline (leads, users,
+// roles, pipeline stages) and drops everything created during the session.
 export async function resetDB(): Promise<void> {
-  await transaction((db) => {
-    const seed = buildSeed();
-    for (const name of COLLECTIONS) db[name] = seed[name];
-  });
-}
-
-// Reset everything created during a session but keep the Leads queue exactly as
-// it is. Every other data collection is emptied; the structural pipelineStages
-// config is preserved. (If leads were somehow wiped, fall back to the seed.)
-export async function resetKeepLeads(): Promise<void> {
-  await transaction((db) => {
-    if (!Array.isArray(db.leads) || db.leads.length === 0) {
-      db.leads = structuredClone(SEED_LEADS);
-    }
-    db.contacts = [];
-    db.accounts = [];
-    db.deals = [];
-    db.products = [];
-    db.users = [];
-    db.roles = [];
-    db.activities = [];
-    db.followUps = [];
-    db.calendarEvents = [];
-    db.pipelineStages = structuredClone(mockPipelineStages as unknown as Row[]);
-  });
+  const run = () => writeDB(buildSeed());
+  const next = writeQueue.then(run, run);
+  writeQueue = next.catch(() => undefined);
+  return next;
 }

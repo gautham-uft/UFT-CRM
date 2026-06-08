@@ -4,12 +4,16 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   LayoutDashboard, Users, Building2, UserCircle, TrendingUp,
-  Activity, CreditCard, Package, Settings, ChevronRight, Zap,
+  Activity, CreditCard, Package, ChevronRight, Zap,
   CalendarClock,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAppData } from "@/contexts/AppDataContext";
+import { useCurrentUser } from "@/contexts/CurrentUserContext";
+import { usePermissions } from "@/contexts/PermissionsContext";
+import { moduleForPath } from "@/lib/permissions";
 
+// Settings now lives inside the Dev Tools panel (top bar), not the sidebar.
 const navItems = [
   { label: "Dashboard",     href: "/",              icon: LayoutDashboard },
   { label: "Leads",         href: "/leads",         icon: Zap },
@@ -20,7 +24,6 @@ const navItems = [
   { label: "Follow-ups",    href: "/follow-ups",    icon: CalendarClock },
   { label: "Business Card", href: "/business-card", icon: CreditCard },
   { label: "Products",      href: "/products",      icon: Package },
-  { label: "Settings",      href: "/settings",      icon: Settings },
 ];
 
 function getTodayStr() {
@@ -31,9 +34,17 @@ function getTodayStr() {
 export default function Sidebar() {
   const pathname = usePathname();
   const { followUps } = useAppData();
+  const { currentUser } = useCurrentUser();
+  const { canRead } = usePermissions();
 
   const today = getTodayStr();
   const pendingCount = followUps.filter(f => !f.done && f.follow_up_date && f.follow_up_date <= today).length;
+
+  // Only show modules the current role can read.
+  const visibleNav = navItems.filter(({ href }) => {
+    const mod = moduleForPath(href);
+    return mod ? canRead(mod) : true;
+  });
 
   return (
     <aside className="fixed left-0 top-0 h-screen w-60 bg-[var(--surface)] border-r border-[var(--border)] flex flex-col z-40 transition-colors duration-250">
@@ -50,7 +61,7 @@ export default function Sidebar() {
 
       {/* Nav */}
       <nav className="flex-1 px-3 py-4 space-y-0.5 overflow-y-auto">
-        {navItems.map(({ label, href, icon: Icon }) => {
+        {visibleNav.map(({ label, href, icon: Icon }) => {
           const active = pathname === href || (href !== "/" && pathname.startsWith(href));
           const isFollowUps = href === "/follow-ups";
           return (
@@ -88,8 +99,8 @@ export default function Sidebar() {
             <Users size={14} className="text-[var(--a-text)]" />
           </div>
           <div className="flex-1 min-w-0">
-            <p className="text-[var(--tx2)] text-xs font-medium truncate">Gautham V.</p>
-            <p className="text-[var(--tx5)] text-xs truncate">Account Executive</p>
+            <p className="text-[var(--tx2)] text-xs font-medium truncate">{currentUser.first_name} {currentUser.last_name}</p>
+            <p className="text-[var(--tx5)] text-xs truncate">{currentUser.role}</p>
           </div>
         </div>
       </div>

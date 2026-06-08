@@ -3,9 +3,16 @@
 import { useEffect, useRef } from "react";
 import { useAppData } from "@/contexts/AppDataContext";
 import { useNow } from "@/contexts/NowContext";
-import { Phone, Users, CheckSquare, AlertCircle, Zap, TrendingUp, CalendarClock } from "lucide-react";
+import { Phone, Users, CheckSquare, AlertCircle, Zap, TrendingUp, CalendarClock, Clock } from "lucide-react";
 import { cn } from "@/lib/utils";
 import Link from "next/link";
+
+// Whole-day difference between two YYYY-MM-DD dates (negative = `to` is past).
+function daysBetween(fromStr: string, toStr: string) {
+  const a = new Date(fromStr + "T00:00:00");
+  const b = new Date(toStr + "T00:00:00");
+  return Math.round((b.getTime() - a.getTime()) / 86_400_000);
+}
 
 const EVENT_CFG = {
   meeting:  { Icon: Users,        color: "text-blue-400",   bg: "bg-blue-400/10",   label: "Meeting"  },
@@ -34,11 +41,20 @@ export default function NotificationsPanel({ onClose }: { onClose: () => void })
   }, [onClose]);
 
   const dueFollowUps = followUps.filter(f => !f.done && f.follow_up_date && f.follow_up_date <= today);
+
+  // Deadlines due today or within one day get their own highlighted section.
+  const dueDeadlines = calendarEvents
+    .filter(e => e.type === "deadline" && !e.done && e.date)
+    .map(e => ({ ...e, days: daysBetween(today, e.date) }))
+    .filter(e => e.days >= 0 && e.days <= 1)
+    .sort((a, b) => a.days - b.days);
+
+  // Today's schedule excludes deadlines (shown above) to avoid duplicates.
   const todayEvents  = calendarEvents
-    .filter(e => e.date === today)
+    .filter(e => e.date === today && e.type !== "deadline")
     .sort((a, b) => (a.time ?? "ZZ").localeCompare(b.time ?? "ZZ"));
 
-  const total = dueFollowUps.length + todayEvents.length;
+  const total = dueFollowUps.length + dueDeadlines.length + todayEvents.length;
 
   return (
     <div
@@ -52,6 +68,31 @@ export default function NotificationsPanel({ onClose }: { onClose: () => void })
       </div>
 
       <div className="max-h-[22rem] overflow-y-auto">
+        {/* Deadlines due today or within one day */}
+        {dueDeadlines.length > 0 && (
+          <div>
+            <div className="px-4 py-1.5 bg-[var(--surface2)] border-b border-[var(--border)]">
+              <span className="text-[10px] font-semibold text-[var(--tx5)] uppercase tracking-wide">Deadlines Due Soon</span>
+            </div>
+            {dueDeadlines.map(e => (
+              <div key={e.id} className="flex items-start gap-3 px-4 py-3 hover:bg-[var(--surface2)] transition-colors border-b border-[var(--border)]">
+                <div className="w-6 h-6 rounded-lg flex items-center justify-center shrink-0 mt-0.5 bg-red-400/10">
+                  <AlertCircle size={11} className="text-red-400" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="text-[var(--tx2)] text-xs font-medium truncate">{e.title}</p>
+                  <div className="flex items-center gap-1.5 mt-0.5">
+                    <span className="flex items-center gap-1 text-[10px] text-rose-400 font-medium">
+                      <Clock size={9} /> {e.days === 0 ? "Due today" : "Due in 1 day"}
+                    </span>
+                    {e.related_to && <span className="text-[var(--tx6)] text-[10px] truncate">· {e.related_to}</span>}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
         {/* Follow-ups due / overdue */}
         {dueFollowUps.length > 0 && (
           <div>

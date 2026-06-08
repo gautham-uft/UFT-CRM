@@ -5,6 +5,9 @@ import { mockDeals, mockPipelineStages } from "@/lib/mock-data";
 import { Plus, DollarSign, User, Building2, X, CheckCircle2, CheckCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAppData } from "@/contexts/AppDataContext";
+import { useCurrentUser } from "@/contexts/CurrentUserContext";
+import { usePermissions } from "@/contexts/PermissionsContext";
+import NoAccess from "@/components/NoAccess";
 import { useCollection } from "@/hooks/useCollection";
 
 const inputCls = "w-full px-3 py-2 bg-[var(--surface2)] border border-[var(--border)] rounded-lg text-[var(--tx2)] text-xs placeholder:text-[var(--tx6)] focus:outline-none focus:border-[var(--a-border)] transition-colors";
@@ -20,10 +23,14 @@ const stageColors: Record<string, string> = {
   "Closed Won":  "border-t-emerald-500",
 };
 
-const EMPTY_DEAL = { name: "", account_name: "", contact: "", amount: "", currency: "USD", stage_id: "1", owner: "Gautham V." };
+const EMPTY_DEAL = { name: "", account_name: "", contact: "", amount: "", currency: "USD", stage_id: "1", owner: "" };
 
 export default function DealsPage() {
   const { addActivity } = useAppData();
+  const { currentUser } = useCurrentUser();
+  const userName = `${currentUser.first_name} ${currentUser.last_name}`;
+  const { ready, canRead, canWrite: cw } = usePermissions();
+  const canWrite = cw("Deals");
 
   const { items: deals, create: createDeal, update: updateDeal } = useCollection<Deal>("deals");
   const { items: accounts } = useCollection<{ id: string; name: string }>("accounts");
@@ -64,7 +71,7 @@ export default function DealsPage() {
     createDeal({
       name:         addForm.name.trim(),
       stage_id:     addForm.stage_id,
-      owner:        addForm.owner.trim() || "Gautham V.",
+      owner:        addForm.owner.trim() || userName,
       account_name: addForm.account_name.trim(),
       total_amount: parseInt(addForm.amount) || 0,
       currency:     addForm.currency,
@@ -79,7 +86,7 @@ export default function DealsPage() {
   function handleLogActivity() {
     if (!selectedDeal || !logNote.trim()) return;
     addActivity({
-      user:          "Gautham V.",
+      user:          userName,
       entity_type:   "deal",
       entity_name:   selectedDeal.name,
       activity_type: logType,
@@ -107,6 +114,8 @@ export default function DealsPage() {
     showToast("Deal updated");
   }
 
+  if (ready && !canRead("Deals")) return <NoAccess module="Deals" />;
+
   return (
     <div className="flex flex-col gap-4 h-[calc(100vh-112px)]">
       <div className="flex items-center justify-between">
@@ -114,18 +123,21 @@ export default function DealsPage() {
           <span className="text-[var(--tx5)] text-sm">{deals.length} deals</span>
           <span className="text-[var(--a-text)] text-sm font-medium">· ${totalPipeline.toLocaleString()} in pipeline</span>
         </div>
-        <button onClick={() => setShowAddModal(true)} className="flex items-center gap-2 px-3 py-1.5 bg-[var(--a)] text-white text-xs rounded-lg hover:bg-[var(--a-hover)] transition-colors">
-          <Plus size={13} /> Add Deal
-        </button>
+        {canWrite && (
+          <button onClick={() => setShowAddModal(true)} className="flex items-center gap-2 px-3 py-1.5 bg-[var(--a)] text-white text-xs rounded-lg hover:bg-[var(--a-hover)] transition-colors">
+            <Plus size={13} /> Add Deal
+          </button>
+        )}
       </div>
 
-      {/* Kanban */}
-      <div className="flex gap-3 overflow-x-auto pb-2 flex-1">
+      {/* Kanban — columns flex to fit the viewport so all stages stay visible
+          without horizontal scrolling. */}
+      <div className="flex gap-2 pb-2 flex-1 min-w-0">
         {activeStages.map(stage => {
           const stageDeals = dealsByStage(stage.id);
           const stageValue = stageDeals.reduce((s, d) => s + d.total_amount, 0);
           return (
-            <div key={stage.id} className="flex-shrink-0 w-64 flex flex-col" onDragOver={e => e.preventDefault()} onDrop={() => handleDrop(stage.id)}>
+            <div key={stage.id} className="flex-1 basis-0 min-w-0 flex flex-col" onDragOver={e => e.preventDefault()} onDrop={() => handleDrop(stage.id)}>
               <div className={cn("bg-[var(--surface)] border border-[var(--border)] rounded-xl p-3 mb-2 border-t-2", stageColors[stage.name] ?? "border-t-slate-500")}>
                 <div className="flex items-center justify-between">
                   <span className="text-[var(--tx2)] text-xs font-semibold">{stage.name}</span>
@@ -135,16 +147,16 @@ export default function DealsPage() {
               </div>
               <div className="flex-1 space-y-2 overflow-y-auto">
                 {stageDeals.map(deal => (
-                  <div key={deal.id} draggable onDragStart={() => setDragging(deal.id)} onClick={() => setSelectedDeal(deal)} className={cn("bg-[var(--surface)] border border-[var(--border)] rounded-xl p-3 cursor-grab hover:border-[var(--a-border)] transition-all active:opacity-70", dragging === deal.id && "opacity-40")}>
+                  <div key={deal.id} draggable={canWrite} onDragStart={() => canWrite && setDragging(deal.id)} onClick={() => setSelectedDeal(deal)} className={cn("bg-[var(--surface)] border border-[var(--border)] rounded-xl p-3 hover:border-[var(--a-border)] transition-all active:opacity-70", canWrite ? "cursor-grab" : "cursor-pointer", dragging === deal.id && "opacity-40")}>
                     <p className="text-[var(--tx2)] text-xs font-medium mb-2 line-clamp-2">{deal.name}</p>
                     <div className="space-y-1.5">
-                      <div className="flex items-center gap-1.5"><DollarSign size={11} className="text-emerald-400 shrink-0" /><span className="text-emerald-400 text-xs font-medium">${deal.total_amount.toLocaleString()}</span></div>
-                      <div className="flex items-center gap-1.5"><Building2 size={11} className="text-[var(--tx5)] shrink-0" /><span className="text-[var(--tx5)] text-xs">{deal.account_name}</span></div>
-                      <div className="flex items-center gap-1.5"><User size={11} className="text-[var(--tx6)] shrink-0" /><span className="text-[var(--tx6)] text-xs">{deal.owner}</span></div>
+                      <div className="flex items-center gap-1.5"><DollarSign size={11} className="text-emerald-400 shrink-0" /><span className="text-emerald-400 text-xs font-medium truncate">${deal.total_amount.toLocaleString()}</span></div>
+                      <div className="flex items-center gap-1.5 min-w-0"><Building2 size={11} className="text-[var(--tx5)] shrink-0" /><span className="text-[var(--tx5)] text-xs truncate">{deal.account_name}</span></div>
+                      <div className="flex items-center gap-1.5 min-w-0"><User size={11} className="text-[var(--tx6)] shrink-0" /><span className="text-[var(--tx6)] text-xs truncate">{deal.owner}</span></div>
                     </div>
                   </div>
                 ))}
-                <button onClick={() => setShowAddModal(true)} className="w-full py-2 border border-dashed border-[var(--surface3)] rounded-xl text-[var(--tx6)] text-xs hover:border-[var(--a-border)] hover:text-[var(--a-text)] transition-colors">+ Add deal</button>
+                {canWrite && <button onClick={() => setShowAddModal(true)} className="w-full py-2 border border-dashed border-[var(--surface3)] rounded-xl text-[var(--tx6)] text-xs hover:border-[var(--a-border)] hover:text-[var(--a-text)] transition-colors">+ Add deal</button>}
               </div>
             </div>
           );
@@ -178,10 +190,12 @@ export default function DealsPage() {
                 </div>
               ))}
             </div>
+            {canWrite && (
             <div className="flex gap-2">
               <button onClick={() => { setLogNote(""); setShowLogModal(true); }} className="flex-1 py-2.5 bg-[var(--a-muted)] border border-[var(--a-border)] text-[var(--a-text)] text-xs rounded-lg hover:bg-[var(--a-muted)] transition-colors font-medium">Log Activity</button>
               <button onClick={() => { setEditForm({ name: selectedDeal.name, account_name: selectedDeal.account_name, contact: selectedDeal.contact, amount: String(selectedDeal.total_amount), currency: selectedDeal.currency, stage_id: selectedDeal.stage_id, owner: selectedDeal.owner }); setShowEditModal(true); }} className="flex-1 py-2.5 bg-[var(--surface2)] border border-[var(--border)] text-[var(--tx4)] text-xs rounded-lg hover:border-[var(--a-border)] transition-colors">Edit Deal</button>
             </div>
+            )}
           </div>
         </div>
       )}
