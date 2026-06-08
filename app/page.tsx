@@ -1,16 +1,19 @@
 "use client";
 
-import { revenueOverTime, mockPipelineStages } from "@/lib/mock-data";
+import { mockPipelineStages } from "@/lib/mock-data";
 import {
   BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
 } from "recharts";
-import { TrendingUp, Users, Building2, Zap, DollarSign, Activity, ArrowUpRight, Bell, Clock } from "lucide-react";
+import { TrendingUp, Users, Building2, Zap, DollarSign, Activity, ArrowUpRight, ArrowDownRight, Bell, Clock } from "lucide-react";
 import { useChartColors } from "@/hooks/useChartColors";
+import { cn } from "@/lib/utils";
 import { useCollection } from "@/hooks/useCollection";
 import { useAppData } from "@/contexts/AppDataContext";
 import { useNow } from "@/contexts/NowContext";
+import { usePermissions } from "@/contexts/PermissionsContext";
+import NoAccess from "@/components/NoAccess";
 
-type DealRow = { id: string; stage_id: string; total_amount: number };
+type DealRow = { id: string; stage_id: string; total_amount: number; created_at?: string };
 
 const CLOSED_WON = "5";
 const CLOSED_LOST = "6";
@@ -34,6 +37,7 @@ export default function Dashboard() {
   const { items: deals }    = useCollection<DealRow>("deals");
   const { activities, calendarEvents, followUps } = useAppData();
   const { today } = useNow();
+  const { ready, canRead } = usePermissions();
 
   // Events & follow-ups coming due within one day → banner alerts.
   const dueSoon = [
@@ -66,19 +70,52 @@ export default function Dashboard() {
     });
   const maxStageValue = Math.max(1, ...dealsByStage.map(s => s.value));
 
+  // Revenue over time — real closed-won revenue grouped by the month the deal
+  // was created, in chronological order. No mock numbers.
+  const revenueOverTime = (() => {
+    const byMonth = new Map<string, number>();
+    closedWon.forEach(d => {
+      const key = (d.created_at ?? "").slice(0, 7); // "YYYY-MM"
+      if (key.length === 7) byMonth.set(key, (byMonth.get(key) ?? 0) + (d.total_amount || 0));
+    });
+    return Array.from(byMonth.entries())
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([key, revenue]) => {
+        const [y, m] = key.split("-").map(Number);
+        return { month: new Date(y, m - 1, 1).toLocaleString(undefined, { month: "short" }), revenue };
+      });
+  })();
+
+  // Month-over-month change, only when there are at least two months to compare.
+  const momChange = (() => {
+    if (revenueOverTime.length < 2) return null;
+    const last = revenueOverTime[revenueOverTime.length - 1].revenue;
+    const prev = revenueOverTime[revenueOverTime.length - 2].revenue;
+    if (!prev) return null;
+    return Math.round(((last - prev) / prev) * 100);
+  })();
+
   const statCards = [
-    { label: "Total Leads",      value: String(leads.length),            sub: `${leads.length} in queue`,                   icon: Zap,        color: "text-violet-400",      bg: "bg-violet-500/10" },
-    { label: "Open Deals",       value: String(openDeals.length),        sub: `$${pipelineValue.toLocaleString()} pipeline`, icon: TrendingUp, color: "text-[var(--a-text)]", bg: "bg-[var(--a-muted)]" },
-    { label: "Closed Won",       value: `$${closedWonValue.toLocaleString()}`, sub: `${closedWon.length} deal${closedWon.length === 1 ? "" : "s"} won`, icon: DollarSign, color: "text-emerald-400", bg: "bg-emerald-500/10" },
-    { label: "Total Contacts",   value: String(contacts.length),         sub: `Across ${accounts.length} accounts`,          icon: Users,      color: "text-sky-400",         bg: "bg-sky-500/10" },
-    { label: "Accounts",         value: String(accounts.length),         sub: "Active accounts",                             icon: Building2,  color: "text-amber-400",       bg: "bg-amber-500/10" },
-    { label: "Win Rate",         value: `${winRate}%`,                    sub: "Closed Won vs Lost",                          icon: Activity,   color: "text-rose-400",        bg: "bg-rose-500/10" },
-  ];
+    { label: "Total Leads",      module: "Leads"    as const, value: String(leads.length),            sub: `${leads.length} in queue`,                   icon: Zap,        color: "text-violet-400",      bg: "bg-violet-500/10" },
+    { label: "Open Deals",       module: "Deals"    as const, value: String(openDeals.length),        sub: `$${pipelineValue.toLocaleString()} pipeline`, icon: TrendingUp, color: "text-[var(--a-text)]", bg: "bg-[var(--a-muted)]" },
+    { label: "Closed Won",       module: "Deals"    as const, value: `$${closedWonValue.toLocaleString()}`, sub: `${closedWon.length} deal${closedWon.length === 1 ? "" : "s"} won`, icon: DollarSign, color: "text-emerald-400", bg: "bg-emerald-500/10" },
+    { label: "Total Contacts",   module: "Contacts" as const, value: String(contacts.length),         sub: `Across ${accounts.length} accounts`,          icon: Users,      color: "text-sky-400",         bg: "bg-sky-500/10" },
+    { label: "Accounts",         module: "Accounts" as const, value: String(accounts.length),         sub: "Active accounts",                             icon: Building2,  color: "text-amber-400",       bg: "bg-amber-500/10" },
+    { label: "Win Rate",         module: "Deals"    as const, value: `${winRate}%`,                    sub: "Closed Won vs Lost",                          icon: Activity,   color: "text-rose-400",        bg: "bg-rose-500/10" },
+  ].filter((card) => canRead(card.module));
+
+  // The dashboard aggregates other modules, so each widget is shown only if the
+  // role can read that module.
+  const showDeals      = canRead("Deals");
+  const showActivities = canRead("Activities");
+  const showFollowUps  = canRead("Follow-ups");
+
+  if (ready && !canRead("Dashboard")) return <NoAccess module="Dashboard" />;
 
   return (
     <div className="space-y-6">
       {/* Due-soon banners */}
-      {dueSoon.length > 0 && (
+      {showFollowUps && dueSoon.length > 0 && (
         <div className="space-y-2">
           {dueSoon.map(item => (
             <div key={item.key} className="flex items-center gap-3 px-4 py-2.5 rounded-xl border bg-rose-500/10 border-rose-500/40">
@@ -109,7 +146,8 @@ export default function Dashboard() {
         ))}
       </div>
 
-      {/* Charts */}
+      {/* Charts — Deals module */}
+      {showDeals && (
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <div className="bg-[var(--surface)] border border-[var(--border)] rounded-xl p-5">
           <div className="flex items-center justify-between mb-4">
@@ -133,25 +171,38 @@ export default function Dashboard() {
         <div className="bg-[var(--surface)] border border-[var(--border)] rounded-xl p-5">
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-[var(--tx2)] font-semibold text-sm">Revenue Over Time</h2>
-            <span className="text-xs text-emerald-400 flex items-center gap-1"><ArrowUpRight size={12} /> +18% MoM</span>
+            {momChange !== null && (
+              <span className={cn("text-xs flex items-center gap-1", momChange >= 0 ? "text-emerald-400" : "text-rose-400")}>
+                {momChange >= 0 ? <ArrowUpRight size={12} /> : <ArrowDownRight size={12} />}
+                {momChange >= 0 ? "+" : ""}{momChange}% MoM
+              </span>
+            )}
           </div>
-          <ResponsiveContainer width="100%" height={220}>
-            <LineChart data={revenueOverTime} margin={{ top: 0, right: 0, left: -20, bottom: 0 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke={c.grid} />
-              <XAxis dataKey="month" tick={{ fill: c.tick, fontSize: 11 }} />
-              <YAxis tick={{ fill: c.tick, fontSize: 11 }} />
-              <Tooltip
-                contentStyle={{ background: c.tooltip.background, border: `1px solid ${c.tooltip.border}`, borderRadius: 8, color: c.tooltip.color }}
-                formatter={(v) => [`$${Number(v).toLocaleString()}`, "Revenue"]}
-              />
-              <Line type="monotone" dataKey="revenue" stroke={c.line} strokeWidth={2} dot={{ fill: c.dot, r: 4 }} />
-            </LineChart>
-          </ResponsiveContainer>
+          {revenueOverTime.length === 0 ? (
+            <div className="h-[220px] flex items-center justify-center text-center">
+              <p className="text-[var(--tx5)] text-xs">No closed-won revenue yet.<br />Win a deal to start tracking revenue over time.</p>
+            </div>
+          ) : (
+            <ResponsiveContainer width="100%" height={220}>
+              <LineChart data={revenueOverTime} margin={{ top: 0, right: 0, left: -20, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke={c.grid} />
+                <XAxis dataKey="month" tick={{ fill: c.tick, fontSize: 11 }} />
+                <YAxis tick={{ fill: c.tick, fontSize: 11 }} />
+                <Tooltip
+                  contentStyle={{ background: c.tooltip.background, border: `1px solid ${c.tooltip.border}`, borderRadius: 8, color: c.tooltip.color }}
+                  formatter={(v) => [`$${Number(v).toLocaleString()}`, "Revenue"]}
+                />
+                <Line type="monotone" dataKey="revenue" stroke={c.line} strokeWidth={2} dot={{ fill: c.dot, r: 4 }} />
+              </LineChart>
+            </ResponsiveContainer>
+          )}
         </div>
       </div>
+      )}
 
       {/* Bottom */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        {showActivities && (
         <div className="bg-[var(--surface)] border border-[var(--border)] rounded-xl p-5">
           <h2 className="text-[var(--tx2)] font-semibold text-sm mb-4">Recent Activity</h2>
           <div className="space-y-3">
@@ -167,7 +218,9 @@ export default function Dashboard() {
             ))}
           </div>
         </div>
+        )}
 
+        {showDeals && (
         <div className="bg-[var(--surface)] border border-[var(--border)] rounded-xl p-5">
           <h2 className="text-[var(--tx2)] font-semibold text-sm mb-4">Deal Count by Stage</h2>
           <div className="space-y-3">
@@ -184,6 +237,7 @@ export default function Dashboard() {
             ))}
           </div>
         </div>
+        )}
       </div>
     </div>
   );

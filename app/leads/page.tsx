@@ -12,6 +12,8 @@ import {
 import { cn } from "@/lib/utils";
 import { useAppData } from "@/contexts/AppDataContext";
 import { useNow } from "@/contexts/NowContext";
+import { usePermissions } from "@/contexts/PermissionsContext";
+import NoAccess from "@/components/NoAccess";
 
 // Add `n` days to a YYYY-MM-DD date string.
 function addDays(base: string, n: number) {
@@ -368,6 +370,8 @@ const EMPTY_FORM = { first_name: "", last_name: "", email: "", phone: "", compan
 export default function LeadsPage() {
   const { addFollowUp, activities } = useAppData();
   const { today, now } = useNow();
+  const { ready, canRead, canWrite: canWriteFn } = usePermissions();
+  const canWrite = canWriteFn("Leads");
 
   const { items: leads, create: createLead, update: updateLead, remove: removeLead } = useCollection<Lead>("leads");
   const { create: createContact } = useCollection<Contact>("contacts");
@@ -528,6 +532,12 @@ export default function LeadsPage() {
     setResponses(prev => ({ ...prev, [lead.id]: r }));
     if (r.category === "callback" || r.category === "postponed") {
       addFollowUp({ source: "lead", source_id: lead.id, entity_name: `${lead.first_name} ${lead.last_name} · ${lead.company_name}`, category: r.category, note: r.preset || r.note || undefined, follow_up_date: r.follow_up_date, logged_at: r.logged_at, done: false });
+      // A callback request or postponement means the lead is now being worked —
+      // move it out of the "new" bucket and into "reviewing".
+      if (lead.status === "new") {
+        updateLead(lead.id, { status: "reviewing" });
+        setViewLead(prev => (prev && prev.id === lead.id ? { ...prev, status: "reviewing" } : prev));
+      }
     }
     setResponseModalLead(null);
     showToast("Response saved");
@@ -536,6 +546,8 @@ export default function LeadsPage() {
       setApproveLead(lead);
     }
   }
+
+  if (ready && !canRead("Leads")) return <NoAccess module="Leads" />;
 
   return (
     <div className="h-[calc(100vh-112px)] flex flex-col gap-4">
@@ -547,6 +559,7 @@ export default function LeadsPage() {
             <span className="text-[var(--tx5)] text-sm">{leads.length} total leads</span>
             {selected.size > 0 && <span className="text-[var(--a-text)] text-sm font-medium">· {selected.size} selected</span>}
           </div>
+          {canWrite && (
           <div className="flex items-center gap-2">
             {selected.size > 0 && (
               <>
@@ -561,6 +574,7 @@ export default function LeadsPage() {
             </button>
             <button onClick={() => setShowAddModal(true)} className="flex items-center gap-2 px-3 py-1.5 bg-[var(--a)] text-white text-xs rounded-lg hover:bg-[var(--a-hover)] transition-colors"><Plus size={13} /> Add Lead</button>
           </div>
+          )}
         </div>
 
         {/* Filter tabs */}
@@ -586,10 +600,12 @@ export default function LeadsPage() {
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-[var(--border)]">
-                <th className="w-10 px-4 py-3">
-                  <input type="checkbox" checked={selected.size === filtered.length && filtered.length > 0} onChange={toggleAll} className="accent-[var(--a)] cursor-pointer" />
-                </th>
-                {["Name","Email","Company","Source","Status","Date","Actions"].map(h => (
+                {canWrite && (
+                  <th className="w-10 px-4 py-3">
+                    <input type="checkbox" checked={selected.size === filtered.length && filtered.length > 0} onChange={toggleAll} className="accent-[var(--a)] cursor-pointer" />
+                  </th>
+                )}
+                {["Name","Email","Company","Source","Status","Date", ...(canWrite ? ["Actions"] : [])].map(h => (
                   <th key={h} className="px-4 py-3 text-left text-xs text-[var(--tx5)] font-medium">{h}</th>
                 ))}
               </tr>
@@ -603,7 +619,7 @@ export default function LeadsPage() {
                   : (selected.has(lead.id) || viewLead?.id === lead.id) ? "bg-[var(--a-subtle)]" : "hover:bg-[var(--surface2)]";
                 return (
                   <tr key={lead.id} onClick={() => setViewLead(lead)} className={cn("transition-colors cursor-pointer", rowCls)}>
-                    <td className="px-4 py-3" onClick={e => e.stopPropagation()}><input type="checkbox" checked={selected.has(lead.id)} onChange={() => toggleSelect(lead.id)} className="accent-[var(--a)] cursor-pointer" /></td>
+                    {canWrite && <td className="px-4 py-3" onClick={e => e.stopPropagation()}><input type="checkbox" checked={selected.has(lead.id)} onChange={() => toggleSelect(lead.id)} className="accent-[var(--a)] cursor-pointer" /></td>}
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-2">
                         <div className="w-7 h-7 rounded-full bg-[var(--a-muted)] flex items-center justify-center text-[var(--a-text)] text-xs font-medium shrink-0">{lead.first_name[0]}{lead.last_name[0]}</div>
@@ -618,6 +634,7 @@ export default function LeadsPage() {
                     <td className="px-4 py-3"><span className="flex items-center gap-1.5 text-[var(--tx4)] text-xs"><Zap size={11} className="text-violet-400 shrink-0" />{sourceLabels[lead.source] ?? lead.source}</span></td>
                     <td className="px-4 py-3"><span className={cn("inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs border capitalize", statusColors[lead.status])}>{statusIcons[lead.status]}{lead.status}</span></td>
                     <td className="px-4 py-3 text-[var(--tx5)] text-xs">{lead.created_at}</td>
+                    {canWrite && (
                     <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
                       <div className="flex items-center gap-2">
                         <button onClick={() => { setApprovePreset(null); setApproveLead(lead); }} className="text-xs text-emerald-400 hover:text-emerald-300 transition-colors">Approve</button>
@@ -627,6 +644,7 @@ export default function LeadsPage() {
                         <button onClick={() => startEditLead(lead)} className="flex items-center gap-1 text-xs text-[var(--tx5)] hover:text-[var(--a-text)] transition-colors"><Pencil size={11} /> Edit</button>
                       </div>
                     </td>
+                    )}
                   </tr>
                 );
               })}
@@ -664,17 +682,19 @@ export default function LeadsPage() {
             <div className="px-5 py-4 border-b border-[var(--border)]">
               {(() => {
                 const resp = responses[viewLead.id];
-                if (!resp) return (
+                if (!resp) return canWrite ? (
                   <button onClick={() => setResponseModalLead(viewLead)} className="w-full flex items-center justify-center gap-2 py-2.5 bg-[var(--surface2)] border border-dashed border-[var(--surface3)] text-[var(--tx5)] text-xs rounded-lg hover:border-[var(--a-border)] hover:text-[var(--a-text)] transition-colors">
                     <MessageSquare size={13} /> Log Lead Response
                   </button>
+                ) : (
+                  <p className="text-[var(--tx6)] text-xs">No response logged.</p>
                 );
                 const cfg = getRCfg(resp.category);
                 return (
                   <div>
                     <div className="flex items-center justify-between mb-2.5">
                       <p className="text-[var(--tx5)] text-xs font-medium">Response</p>
-                      <button onClick={() => setResponseModalLead(viewLead)} className="text-[10px] text-[var(--tx5)] hover:text-[var(--tx3)] transition-colors">Update</button>
+                      {canWrite && <button onClick={() => setResponseModalLead(viewLead)} className="text-[10px] text-[var(--tx5)] hover:text-[var(--tx3)] transition-colors">Update</button>}
                     </div>
                     <div className={cn("rounded-xl border p-3 space-y-1.5", cfg.badge)}>
                       <div className="flex items-center justify-between">
@@ -691,6 +711,7 @@ export default function LeadsPage() {
             </div>
 
             {/* Actions */}
+            {canWrite && (
             <div className="px-5 py-4 border-b border-[var(--border)]">
               <div className="grid grid-cols-2 gap-2">
                 <button onClick={() => { setApprovePreset(null); setApproveLead(viewLead); setViewLead(null); }} className="py-2 bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs rounded-lg hover:bg-emerald-500/20 transition-colors font-medium">✓ Approve</button>
@@ -699,6 +720,7 @@ export default function LeadsPage() {
                 <button onClick={() => handleToggleFlag(viewLead)} className={cn("py-2 text-xs rounded-lg transition-colors font-medium border col-span-2 flex items-center justify-center gap-2", viewLead.flagged ? "bg-[var(--surface2)] border-[var(--border)] text-[var(--tx4)] hover:border-[var(--a-border)]" : "bg-rose-500/10 border-rose-500/30 text-rose-400 hover:bg-rose-500/20")}><Flag size={13} /> {viewLead.flagged ? "Remove Incorrect Flag" : "Flag as Incorrect"}</button>
               </div>
             </div>
+            )}
 
             {/* Activity timeline */}
             <div className="px-5 py-4 flex-1">

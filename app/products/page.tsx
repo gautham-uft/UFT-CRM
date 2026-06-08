@@ -5,6 +5,8 @@ import { mockProducts } from "@/lib/mock-data";
 import { Plus, Package, RefreshCw, Tag, X, CheckCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useCollection } from "@/hooks/useCollection";
+import { usePermissions } from "@/contexts/PermissionsContext";
+import NoAccess from "@/components/NoAccess";
 
 const inputCls = "w-full px-3 py-2 bg-[var(--surface2)] border border-[var(--border)] rounded-lg text-[var(--tx2)] text-xs placeholder:text-[var(--tx6)] focus:outline-none focus:border-[var(--a-border)] transition-colors";
 const labelCls = "block text-[var(--tx5)] text-xs font-medium mb-1";
@@ -13,6 +15,8 @@ type Product = (typeof mockProducts)[0];
 const EMPTY_FORM = { name: "", sku: "", description: "", base_price: "", billing_type: "recurring", is_active: true };
 
 export default function ProductsPage() {
+  const { ready, canRead, canWrite: cw } = usePermissions();
+  const canWrite = cw("Products");
   const { items: products, create: createProduct, update: updateProduct } = useCollection<Product>("products");
   const { items: deals } = useCollection<{ id: string; name: string; stage_id: string }>("deals");
   const [filter,        setFilter]        = useState("all");
@@ -68,6 +72,8 @@ export default function ProductsPage() {
     setAddToDealProd(null);
   }
 
+  if (ready && !canRead("Products")) return <NoAccess module="Products" />;
+
   return (
     <div className="space-y-5">
       <div className="flex items-center justify-between">
@@ -78,9 +84,11 @@ export default function ProductsPage() {
             </button>
           ))}
         </div>
-        <button onClick={() => setShowAddModal(true)} className="flex items-center gap-2 px-3 py-1.5 bg-[var(--a)] text-white text-xs rounded-lg hover:bg-[var(--a-hover)] transition-colors">
-          <Plus size={13} /> Add Product
-        </button>
+        {canWrite && (
+          <button onClick={() => setShowAddModal(true)} className="flex items-center gap-2 px-3 py-1.5 bg-[var(--a)] text-white text-xs rounded-lg hover:bg-[var(--a-hover)] transition-colors">
+            <Plus size={13} /> Add Product
+          </button>
+        )}
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
@@ -102,6 +110,7 @@ export default function ProductsPage() {
               <span className="text-emerald-400 font-bold text-lg">${p.base_price.toLocaleString()}</span>
               <span className="text-[var(--tx6)] text-xs">{p.billing_type === "recurring" ? "/ year" : "one-time"}</span>
             </div>
+            {canWrite && (
             <div className="flex gap-2 mt-3">
               <button
                 onClick={() => { setEditProduct(p); setEditForm({ name: p.name, sku: p.sku, description: p.description, base_price: String(p.base_price), billing_type: p.billing_type, is_active: p.is_active }); }}
@@ -112,6 +121,7 @@ export default function ProductsPage() {
                 className="flex-1 py-1.5 bg-[var(--a-muted)] border border-[var(--a-border)] text-[var(--a-text)] text-xs rounded-lg hover:bg-[var(--a-muted)] transition-colors"
               >Add to Deal</button>
             </div>
+            )}
           </div>
         ))}
       </div>

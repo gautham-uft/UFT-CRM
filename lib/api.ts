@@ -1,70 +1,41 @@
-// Thin client for the local JSON database exposed under /api/*.
-// Used by the useCollection hook and AppDataContext.
+// Offline-first data client.
+//
+// Reads are served from the local copy (localStorage) for instant display;
+// writes update the local copy AND mirror to the cloud bin. The actual logic
+// lives in lib/sync-store; this module just preserves the original
+// listCollection / createItem / … signatures the app already uses.
 
-async function handle<T>(res: Response): Promise<T> {
-  if (!res.ok) {
-    const detail = await res.text().catch(() => "");
-    throw new Error(`Request failed (${res.status}): ${detail}`);
-  }
-  return res.json() as Promise<T>;
-}
+import {
+  listLocal,
+  createLocal,
+  updateLocal,
+  deleteLocal,
+  replaceLocal,
+  resetAll,
+  type Row,
+} from "@/lib/sync-store";
 
 export async function listCollection<T>(collection: string): Promise<T[]> {
-  return handle<T[]>(await fetch(`/api/${collection}`, { cache: "no-store" }));
+  return (await listLocal(collection)) as unknown as T[];
 }
 
 export async function createItem<T>(collection: string, data: Partial<T>): Promise<T> {
-  return handle<T>(
-    await fetch(`/api/${collection}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(data),
-    }),
-  );
+  return (await createLocal(collection, data as Record<string, unknown>)) as unknown as T;
 }
 
-export async function updateItem<T>(
-  collection: string,
-  id: string,
-  patch: Partial<T>,
-): Promise<T> {
-  return handle<T>(
-    await fetch(`/api/${collection}/${id}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(patch),
-    }),
-  );
+export async function updateItem<T>(collection: string, id: string, patch: Partial<T>): Promise<T> {
+  return (await updateLocal(collection, id, patch as Record<string, unknown>)) as unknown as T;
 }
 
 export async function deleteItem(collection: string, id: string): Promise<void> {
-  await handle<{ ok: boolean }>(
-    await fetch(`/api/${collection}/${id}`, { method: "DELETE" }),
-  );
+  await deleteLocal(collection, id);
 }
 
 export async function replaceCollection<T>(collection: string, rows: T[]): Promise<T[]> {
-  return handle<T[]>(
-    await fetch(`/api/${collection}`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(rows),
-    }),
-  );
+  return (await replaceLocal(collection, rows as unknown as Row[])) as unknown as T[];
 }
 
+// Reset the cloud database to the seed baseline, then pull it into the local copy.
 export async function resetDatabase(): Promise<void> {
-  await handle<{ ok: boolean }>(await fetch(`/api/reset`, { method: "POST" }));
-}
-
-// Reset everything except the Leads queue (contacts, accounts, deals,
-// follow-ups, calendar events, activities are all cleared).
-export async function resetKeepLeads(): Promise<void> {
-  await handle<{ ok: boolean }>(
-    await fetch(`/api/reset`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ keepLeads: true }),
-    }),
-  );
+  await resetAll();
 }

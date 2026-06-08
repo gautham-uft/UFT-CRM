@@ -7,6 +7,8 @@ import { useAppData } from "@/contexts/AppDataContext";
 import { useCollection } from "@/hooks/useCollection";
 import { cn } from "@/lib/utils";
 import ColorFilter, { type ColorFilterValue, type RecordColor } from "@/components/ColorFilter";
+import { usePermissions } from "@/contexts/PermissionsContext";
+import NoAccess from "@/components/NoAccess";
 
 type Contact = (typeof mockContacts)[0] & { flagged?: boolean };
 
@@ -31,6 +33,8 @@ const rowBg = (c: Contact) => {
 
 export default function ContactsPage() {
   const { activities, addActivity } = useAppData();
+  const { ready, canRead, canWrite: cw } = usePermissions();
+  const canWrite = cw("Contacts");
 
   const { items: contacts, create: createContact, update: updateContact, remove: removeContact } = useCollection<Contact>("contacts");
   const [selected,      setSelected]      = useState<Contact | null>(null);
@@ -133,15 +137,19 @@ export default function ContactsPage() {
     showToast(`${logType === "call_log" ? "Call" : logType} logged for ${selected.first_name}`);
   }
 
+  if (ready && !canRead("Contacts")) return <NoAccess module="Contacts" />;
+
   return (
     <div className="h-[calc(100vh-112px)] flex flex-col gap-4">
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <span className="text-[var(--tx5)] text-sm">{visible.length} of {contacts.length} contacts</span>
         <div className="flex items-center gap-3">
           <ColorFilter value={colorFilter} onChange={setColorFilter} />
-          <button onClick={() => setShowAddModal(true)} className="flex items-center gap-2 px-3 py-1.5 bg-[var(--a)] text-white text-xs rounded-lg hover:bg-[var(--a-hover)] transition-colors">
-            <Plus size={13} /> Add Contact
-          </button>
+          {canWrite && (
+            <button onClick={() => setShowAddModal(true)} className="flex items-center gap-2 px-3 py-1.5 bg-[var(--a)] text-white text-xs rounded-lg hover:bg-[var(--a-hover)] transition-colors">
+              <Plus size={13} /> Add Contact
+            </button>
+          )}
         </div>
       </div>
 
@@ -183,7 +191,7 @@ export default function ContactsPage() {
             <div className="flex items-start justify-between">
               <h2 className="text-[var(--tx2)] font-semibold text-sm">{editing ? "Edit Contact" : "Contact Detail"}</h2>
               <div className="flex items-center gap-2">
-                {!editing && <button onClick={startEdit} className="flex items-center gap-1 text-[var(--tx5)] hover:text-[var(--a-text)] text-xs transition-colors"><Pencil size={13} /> Edit</button>}
+                {!editing && canWrite && <button onClick={startEdit} className="flex items-center gap-1 text-[var(--tx5)] hover:text-[var(--a-text)] text-xs transition-colors"><Pencil size={13} /> Edit</button>}
                 <button onClick={closeDetail} className="text-[var(--tx5)] hover:text-[var(--tx3)] transition-colors"><X size={14} /></button>
               </div>
             </div>
@@ -226,7 +234,7 @@ export default function ContactsPage() {
                   </a>
                 </div>
                 <div className="flex gap-2">
-                  <button onClick={() => { setLogType("call_log"); setShowLogModal(true); }} className="flex-1 py-2 bg-[var(--a-muted)] border border-[var(--a-border)] text-[var(--a-text)] text-xs rounded-lg hover:bg-[var(--a-muted)] transition-colors">Log Call</button>
+                  {canWrite && <button onClick={() => { setLogType("call_log"); setShowLogModal(true); }} className="flex-1 py-2 bg-[var(--a-muted)] border border-[var(--a-border)] text-[var(--a-text)] text-xs rounded-lg hover:bg-[var(--a-muted)] transition-colors">Log Call</button>}
                   <button onClick={() => window.open(`mailto:${selected.email}`, "_blank")} className="flex-1 py-2 bg-[var(--surface2)] border border-[var(--border)] text-[var(--tx4)] text-xs rounded-lg hover:border-[var(--a-border)] transition-colors">Send Email</button>
                 </div>
                 <div>
@@ -244,12 +252,14 @@ export default function ContactsPage() {
                     </div>
                   )}
                 </div>
+                {canWrite && (
                 <div className="border-t border-[var(--border)] pt-4 grid grid-cols-2 gap-2">
                   <button onClick={handleToggleFlag} className={cn("flex items-center justify-center gap-2 py-2.5 text-xs rounded-lg transition-colors font-medium border", selected.flagged ? "bg-[var(--surface2)] border-[var(--border)] text-[var(--tx4)] hover:border-[var(--a-border)]" : "bg-rose-500/10 border-rose-500/30 text-rose-400 hover:bg-rose-500/20")}>
                     <Flag size={13} /> {selected.flagged ? "Remove Flag" : "Flag as Incorrect"}
                   </button>
                   <button onClick={handleDeleteContact} className="flex items-center justify-center gap-2 py-2.5 bg-rose-500/10 border border-rose-500/30 text-rose-400 text-xs rounded-lg hover:bg-rose-500/20 transition-colors font-medium"><Trash2 size={13} /> Delete</button>
                 </div>
+                )}
               </>
             )}
           </div>

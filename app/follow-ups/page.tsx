@@ -3,6 +3,8 @@
 import { useState } from "react";
 import { useAppData, type FollowUpItem } from "@/contexts/AppDataContext";
 import { useNow } from "@/contexts/NowContext";
+import { usePermissions } from "@/contexts/PermissionsContext";
+import NoAccess from "@/components/NoAccess";
 import { cn } from "@/lib/utils";
 import {
   Phone, Clock, XCircle, CheckCircle, Calendar, Check,
@@ -41,7 +43,7 @@ function addDays(base: string, n: number) {
 
 // ── FollowUpCard ──────────────────────────────────────────────────
 
-function FollowUpCard({ item, onToggle, onEdit, onDelete }: { item: FollowUpItem; onToggle: () => void; onEdit: () => void; onDelete: () => void }) {
+function FollowUpCard({ item, onToggle, onEdit, onDelete, canWrite }: { item: FollowUpItem; onToggle: () => void; onEdit: () => void; onDelete: () => void; canWrite: boolean }) {
   const cat = CAT[item.category] ?? { label: item.category, color: "text-[var(--tx4)]", bg: "bg-[var(--surface2)] border-[var(--border)]", Icon: Calendar };
   const src = SRC[item.source] ?? SRC.calendar;
 
@@ -51,12 +53,14 @@ function FollowUpCard({ item, onToggle, onEdit, onDelete }: { item: FollowUpItem
       item.done && "opacity-40"
     )}>
       <div className="flex items-start gap-3">
-        {/* Done toggle */}
+        {/* Done toggle (read-only indicator when the role can't write) */}
         <button
-          onClick={onToggle}
+          onClick={canWrite ? onToggle : undefined}
+          disabled={!canWrite}
           className={cn(
             "mt-0.5 w-5 h-5 rounded-md border-2 flex items-center justify-center shrink-0 transition-all",
-            item.done ? "bg-[var(--a)] border-[var(--a)]" : "border-[var(--tx5)] hover:border-[var(--a)]"
+            item.done ? "bg-[var(--a)] border-[var(--a)]" : "border-[var(--tx5)]",
+            canWrite ? "hover:border-[var(--a)] cursor-pointer" : "cursor-default"
           )}
         >
           {item.done && <Check size={11} className="text-white" />}
@@ -89,10 +93,12 @@ function FollowUpCard({ item, onToggle, onEdit, onDelete }: { item: FollowUpItem
             ) : <span className="text-[10px] text-[var(--tx6)]">No date set</span>}
 
             {/* Edit / delete */}
-            <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-              <button onClick={onEdit} title="Edit" className="w-6 h-6 rounded-md flex items-center justify-center text-[var(--tx5)] hover:text-[var(--a-text)] hover:bg-[var(--surface2)] transition-colors"><Pencil size={12} /></button>
-              <button onClick={onDelete} title="Delete" className="w-6 h-6 rounded-md flex items-center justify-center text-[var(--tx5)] hover:text-rose-400 hover:bg-rose-500/10 transition-colors"><Trash2 size={12} /></button>
-            </div>
+            {canWrite && (
+              <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                <button onClick={onEdit} title="Edit" className="w-6 h-6 rounded-md flex items-center justify-center text-[var(--tx5)] hover:text-[var(--a-text)] hover:bg-[var(--surface2)] transition-colors"><Pencil size={12} /></button>
+                <button onClick={onDelete} title="Delete" className="w-6 h-6 rounded-md flex items-center justify-center text-[var(--tx5)] hover:text-rose-400 hover:bg-rose-500/10 transition-colors"><Trash2 size={12} /></button>
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -107,6 +113,8 @@ const CATEGORY_OPTIONS = ["callback", "postponed", "not_interested", "progressin
 export default function FollowUpsPage() {
   const { followUps, toggleFollowUp, updateFollowUp, deleteFollowUp } = useAppData();
   const { today } = useNow();
+  const { ready, canRead, canWrite: cw } = usePermissions();
+  const canWrite = cw("Follow-ups");
 
   const [editItem, setEditItem] = useState<FollowUpItem | null>(null);
   const [editForm, setEditForm] = useState({ entity_name: "", category: "callback", note: "", follow_up_date: "" });
@@ -159,6 +167,8 @@ export default function FollowUpsPage() {
     { key: "done",     label: "Completed", items: done,     dotCls: "bg-[var(--tx6)]",       headCls: "text-[var(--tx6)]"      },
   ].filter(s => s.items.length > 0);
 
+  if (ready && !canRead("Follow-ups")) return <NoAccess module="Follow-ups" />;
+
   return (
     <div className="space-y-6">
 
@@ -197,6 +207,7 @@ export default function FollowUpsPage() {
                 <FollowUpCard
                   key={item.id}
                   item={item}
+                  canWrite={canWrite}
                   onToggle={() => toggleFollowUp(item.id)}
                   onEdit={() => startEdit(item)}
                   onDelete={() => handleDelete(item)}

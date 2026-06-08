@@ -5,6 +5,8 @@ import { mockAccounts, mockContacts, mockDeals } from "@/lib/mock-data";
 import { Plus, CheckCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAppData } from "@/contexts/AppDataContext";
+import { usePermissions } from "@/contexts/PermissionsContext";
+import NoAccess from "@/components/NoAccess";
 
 const activityIcons: Record<string, string> = {
   call_log: "📞", email: "✉️", note: "📝", meeting: "📅",
@@ -29,6 +31,8 @@ const RELATED_OPTIONS = [
 
 export default function ActivitiesPage() {
   const { activities, addActivity } = useAppData();
+  const { ready, canRead, canWrite: cw } = usePermissions();
+  const canWrite = cw("Activities");
 
   const [filter,     setFilter]     = useState("all");
   const [showModal,  setShowModal]  = useState(false);
@@ -57,6 +61,8 @@ export default function ActivitiesPage() {
     showToast("Activity logged");
   }
 
+  if (ready && !canRead("Activities")) return <NoAccess module="Activities" />;
+
   return (
     <div className="space-y-5">
       <div className="flex items-center justify-between">
@@ -67,9 +73,11 @@ export default function ActivitiesPage() {
             </button>
           ))}
         </div>
-        <button onClick={() => setShowModal(true)} className="flex items-center gap-2 px-3 py-1.5 bg-[var(--a)] text-white text-xs rounded-lg hover:bg-[var(--a-hover)] transition-colors">
-          <Plus size={13} /> Log Activity
-        </button>
+        {canWrite && (
+          <button onClick={() => setShowModal(true)} className="flex items-center gap-2 px-3 py-1.5 bg-[var(--a)] text-white text-xs rounded-lg hover:bg-[var(--a-hover)] transition-colors">
+            <Plus size={13} /> Log Activity
+          </button>
+        )}
       </div>
 
       <div className="relative">
