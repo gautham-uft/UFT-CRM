@@ -9,6 +9,8 @@ import {
   CheckCircle, XCircle, Clock, MessageSquare, Loader2,
   Users, UserPlus, ArrowRight, Flag, Pencil, Send, Inbox,
   MapPin, Link, Cake, FileText,
+  Briefcase, Globe, ShieldCheck, AlertCircle,
+  Video, Film, CalendarPlus, Sparkles, Star, ExternalLink,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAppData } from "@/contexts/AppDataContext";
@@ -19,6 +21,12 @@ import { isRestrictedRole } from "@/lib/permissions";
 import NoAccess from "@/components/NoAccess";
 import NotesSection from "@/components/NotesSection";
 import { useQuickActions } from "@/components/QuickActions";
+import MeetingModal, { type MeetingPayload } from "@/components/MeetingModal";
+import { buildManpowerIntro } from "@/lib/email-templates";
+import { sendEmail } from "@/lib/email";
+import { enrichLeadRequest } from "@/lib/enrichment-client";
+import type { EnrichmentResult, EnrichedPOC } from "@/lib/enrichment/types";
+import { requestScoutVerification } from "@/lib/scout-client";
 
 type LeadRequest = {
   id:           string;
@@ -53,9 +61,10 @@ const statusIcons: Record<string, React.ReactNode> = {
 };
 
 const sourceLabels: Record<string, string> = {
-  n8n_apify:   "Apify / LinkedIn",
-  manual_ocr:  "Business Card",
-  inbound_web: "Web Form",
+  n8n_apify:    "Apify / LinkedIn",
+  manual_ocr:   "Business Card",
+  inbound_web:  "Web Form",
+  quick_search: "Quick Tab",
 };
 
 const activityTypeColors: Record<string, string> = {
@@ -68,12 +77,34 @@ const activityTypeColors: Record<string, string> = {
 const inputCls = "w-full px-3 py-2 bg-[var(--surface2)] border border-[var(--border)] rounded-lg text-[var(--tx2)] text-xs placeholder:text-[var(--tx6)] focus:outline-none focus:border-[var(--a-border)] transition-colors";
 const labelCls = "block text-[var(--tx5)] text-xs font-medium mb-1";
 
+type LeadProfile = {
+  industry?:        string;
+  company_size?:    string;
+  website?:         string;
+  open_roles?:      string;
+  // First point of contact for the company
+  poc_name?:        string;
+  poc_title?:       string;
+  poc_email?:       string;
+  poc_linkedin?:    string;
+  naukri_status?:   "pending_verification" | "found" | "not_found";
+  naukri_url?:      string;
+  internal_notes?:  string;
+  last_updated?:    string;
+  // Enrichment audit
+  enriched_at?:     string;
+  enrichment_from?: string;
+};
+
 type Lead = (typeof mockLeads)[0] & {
   flagged?:       boolean;
   date_of_birth?: string;
   address?:       string;
   linkedin?:      string;
   summary?:       string;
+  profile?:       LeadProfile;
+  email_sent_at?: string;
+  email_status?:  "sent" | "failed";
 };
 type Contact = (typeof mockContacts)[0] & {
   date_of_birth?: string;
@@ -400,7 +431,7 @@ function ApproveLeadModal({
 const EMPTY_FORM = { first_name: "", last_name: "", email: "", phone: "", company_name: "", source: "inbound_web", status: "new", date_of_birth: "", address: "", linkedin: "", summary: "" };
 
 export default function LeadsPage() {
-  const { addFollowUp, addActivity, activities } = useAppData();
+  const { addFollowUp, addActivity, activities, calendarEvents, addCalendarEvent, updateCalendarEvent } = useAppData();
   const { today, now } = useNow();
   const { ready, canRead, canWrite: canWriteFn } = usePermissions();
   const { currentUser } = useCurrentUser();
@@ -415,6 +446,9 @@ export default function LeadsPage() {
   const { create: createContact } = useCollection<Contact>("contacts");
   const { create: createAccount } = useCollection<Account>("accounts");
   const { items: leadRequests, create: createRequest, update: updateRequest } = useCollection<LeadRequest>("leadRequests");
+  const { items: users } = useCollection<{ id: string; first_name: string; last_name: string; role: string }>("users");
+  const userOptions = users.map(u => { const name = `${u.first_name} ${u.last_name}`.trim(); return { value: name, label: `${name} · ${u.role}` }; });
+  const scoutUsers = users.filter(u => u.role === "Scout");
   const [activeRequestId,   setActiveRequestId]   = useState<string | null>(null);
   const [selected,          setSelected]          = useState<Set<string>>(new Set());
   const [filter,            setFilter]            = useState("all");
@@ -429,6 +463,156 @@ export default function LeadsPage() {
   const [syncing,           setSyncing]           = useState(false);
   const [addForm,           setAddForm]           = useState(EMPTY_FORM);
   const [toast,             setToast]             = useState("");
+
+  const canReadProfile  = canRead("Lead Profiles");
+  const canWriteProfile = canWriteFn("Lead Profiles");
+
+  const [detailTab,       setDetailTab]       = useState<"overview" | "profile">("overview");
+  const [editingProfile,  setEditingProfile]  = useState(false);
+  const EMPTY_PROF: { industry: string; company_size: string; website: string; open_roles: string; poc_name: string; poc_title: string; poc_email: string; poc_linkedin: string; naukri_status: LeadProfile["naukri_status"] | ""; naukri_url: string; internal_notes: string } = { industry: "", company_size: "", website: "", open_roles: "", poc_name: "", poc_title: "", poc_email: "", poc_linkedin: "", naukri_status: "", naukri_url: "", internal_notes: "" };
+  const [profileForm,     setProfileForm]     = useState(EMPTY_PROF);
+
+  function openProfileEdit(lead: Lead) {
+    const p = lead.profile ?? {};
+    setProfileForm({
+      industry:      p.industry      ?? "",
+      company_size:  p.company_size  ?? "",
+      website:       p.website       ?? "",
+      open_roles:    p.open_roles    ?? "",
+      poc_name:      p.poc_name      ?? "",
+      poc_title:     p.poc_title     ?? "",
+      poc_email:     p.poc_email     ?? "",
+      poc_linkedin:  p.poc_linkedin  ?? "",
+      naukri_status: p.naukri_status ?? "",
+      naukri_url:    p.naukri_url    ?? "",
+      internal_notes: p.internal_notes ?? "",
+    });
+    setEditingProfile(true);
+  }
+
+  function handleSaveProfile(lead: Lead) {
+    const patch: Partial<Lead> = {
+      profile: {
+        ...lead.profile,
+        industry:      profileForm.industry.trim()      || undefined,
+        company_size:  profileForm.company_size.trim()  || undefined,
+        website:       profileForm.website.trim()       || undefined,
+        open_roles:    profileForm.open_roles.trim()    || undefined,
+        poc_name:      profileForm.poc_name.trim()      || undefined,
+        poc_title:     profileForm.poc_title.trim()     || undefined,
+        poc_email:     profileForm.poc_email.trim()     || undefined,
+        poc_linkedin:  profileForm.poc_linkedin.trim()  || undefined,
+        naukri_status: (profileForm.naukri_status as LeadProfile["naukri_status"]) || undefined,
+        naukri_url:    profileForm.naukri_url.trim()    || undefined,
+        internal_notes: profileForm.internal_notes.trim() || undefined,
+        last_updated:  new Date().toISOString().slice(0, 10),
+      },
+    };
+    updateLead(lead.id, patch);
+    setViewLead(prev => prev && prev.id === lead.id ? { ...prev, ...patch } : prev);
+    setEditingProfile(false);
+    showToast("Profile saved");
+  }
+
+  // ── Meeting tracking ──
+  const [meetingModalLead, setMeetingModalLead] = useState<Lead | null>(null);
+  const [recordingEditId,  setRecordingEditId]  = useState<string | null>(null);
+  const [recordingInput,   setRecordingInput]   = useState("");
+
+  const leadMeetings = viewLead
+    ? calendarEvents
+        .filter(e => e.lead_id === viewLead.id)
+        .sort((a, b) => `${b.date}${b.time ?? ""}`.localeCompare(`${a.date}${a.time ?? ""}`))
+    : [];
+
+  function handleSaveMeeting(payload: MeetingPayload) {
+    if (!meetingModalLead) return;
+    addCalendarEvent(payload);
+    const modeLabel = payload.meeting_mode === "offline"
+      ? `in person${payload.location ? ` at ${payload.location}` : ""}`
+      : `online${payload.meeting_platform ? ` via ${payload.meeting_platform}` : ""}`;
+    addActivity({
+      user: userName, entity_type: "lead",
+      entity_name: `${meetingModalLead.first_name} ${meetingModalLead.last_name}`,
+      activity_type: "meeting",
+      description: `Scheduled meeting: ${payload.title} on ${payload.date} (${modeLabel})`,
+      created_at: nowISO(),
+    });
+    setMeetingModalLead(null);
+    showToast("Meeting scheduled");
+  }
+
+  function startRecordingEdit(meetingId: string, current?: string) {
+    setRecordingEditId(meetingId);
+    setRecordingInput(current ?? "");
+  }
+  function saveRecording(meetingId: string) {
+    const url = recordingInput.trim();
+    updateCalendarEvent(meetingId, { recording_url: url || undefined });
+    setRecordingEditId(null);
+    setRecordingInput("");
+    showToast(url ? "Recording saved" : "Recording removed");
+  }
+
+  // ── Outreach email ──
+  const [emailLead,    setEmailLead]    = useState<Lead | null>(null);
+  const [emailForm,    setEmailForm]    = useState({ subject: "", body: "" });
+  const [emailSending, setEmailSending] = useState(false);
+  const [emailError,   setEmailError]   = useState("");
+  const EMPTY_EMAIL_MEETING = { enabled: false, date: "", time: "", mode: "online" as "online" | "offline", location: "", link: "" };
+  const [emailMeeting, setEmailMeeting] = useState(EMPTY_EMAIL_MEETING);
+
+  function openEmailCompose(lead: Lead) {
+    const { subject, body } = buildManpowerIntro({
+      pocName:    `${lead.first_name} ${lead.last_name}`.trim(),
+      company:    lead.company_name,
+      openRoles:  lead.profile?.open_roles,
+      senderName: userName,
+    });
+    setEmailForm({ subject, body });
+    setEmailMeeting({ ...EMPTY_EMAIL_MEETING, date: today });
+    setEmailError("");
+    setEmailLead(lead);
+  }
+
+  async function handleSendEmail() {
+    if (!emailLead || !emailForm.subject.trim() || !emailForm.body.trim() || emailSending) return;
+    setEmailSending(true);
+    setEmailError("");
+    try {
+      const withMeeting = emailMeeting.enabled && emailMeeting.date;
+      const meeting = withMeeting
+        ? {
+            title:    emailForm.subject.trim(),
+            date:     emailMeeting.date,
+            time:     emailMeeting.time || undefined,
+            mode:     emailMeeting.mode,
+            location: emailMeeting.mode === "offline" ? emailMeeting.location.trim() || undefined : undefined,
+            link:     emailMeeting.mode === "online"  ? emailMeeting.link.trim()     || undefined : undefined,
+          }
+        : undefined;
+      const leadFullName = `${emailLead.first_name} ${emailLead.last_name}`.trim();
+      await sendEmail({ to: emailLead.email, subject: emailForm.subject.trim(), text: emailForm.body, meeting, lead_id: emailLead.id, lead_name: leadFullName });
+      const sentAt = nowISO();
+      updateLead(emailLead.id, { email_sent_at: sentAt, email_status: "sent" });
+      setViewLead(prev => prev && prev.id === emailLead.id ? { ...prev, email_sent_at: sentAt, email_status: "sent" } : prev);
+      addActivity({
+        user: userName, entity_type: "lead",
+        entity_name: leadFullName,
+        activity_type: "email",
+        description: withMeeting
+          ? `Sent meeting invite to ${emailLead.email} for ${emailMeeting.date}${emailMeeting.time ? ` at ${emailMeeting.time}` : ""} (Accept/Decline)`
+          : `Sent outreach email to ${emailLead.email}: "${emailForm.subject.trim()}"`,
+        created_at: sentAt,
+      });
+      setEmailLead(null);
+      showToast(withMeeting ? "Meeting invite sent" : "Email sent");
+    } catch (err) {
+      setEmailError((err as Error).message);
+    } finally {
+      setEmailSending(false);
+    }
+  }
 
   function showToast(msg: string) { setToast(msg); setTimeout(() => setToast(""), 3000); }
 
@@ -657,6 +841,127 @@ export default function LeadsPage() {
     }
   }
 
+  // ── Web enrichment ──
+  const [enrichTarget,  setEnrichTarget]  = useState<Lead | null>(null);
+  const [enrichLoading, setEnrichLoading] = useState(false);
+  const [enrichResult,  setEnrichResult]  = useState<EnrichmentResult | null>(null);
+  const [enrichError,   setEnrichError]   = useState("");
+
+  function domainOf(lead: Lead): string | undefined {
+    if (lead.email.includes("@")) return lead.email.split("@")[1].trim().toLowerCase();
+    const site = lead.profile?.website;
+    if (site) return site.replace(/^https?:\/\//, "").replace(/\/.*$/, "").trim().toLowerCase() || undefined;
+    return undefined;
+  }
+
+  async function runEnrichment(lead: Lead) {
+    setEnrichTarget(lead);
+    setEnrichResult(null);
+    setEnrichError("");
+    setEnrichLoading(true);
+    try {
+      const result = await enrichLeadRequest({ company_name: lead.company_name, domain: domainOf(lead) });
+      setEnrichResult(result);
+      if (result.providers_used.length === 0 && !result.provider_errors) {
+        setEnrichError("No matching data found for this company.");
+      }
+    } catch (err) {
+      setEnrichError((err as Error).message);
+    } finally {
+      setEnrichLoading(false);
+    }
+  }
+
+  function applyEnrichedCompany() {
+    if (!enrichTarget || !enrichResult) return;
+    const c = enrichResult.company;
+    const patch: Partial<Lead> = {
+      profile: {
+        ...enrichTarget.profile,
+        industry:     enrichTarget.profile?.industry     || c.industry,
+        company_size: enrichTarget.profile?.company_size || c.size,
+        website:      enrichTarget.profile?.website      || c.website,
+        enriched_at:     new Date().toISOString().slice(0, 10),
+        enrichment_from: enrichResult.providers_used.join(", ") || undefined,
+        last_updated:    new Date().toISOString().slice(0, 10),
+      },
+      ...(enrichTarget.summary || !c.description ? {} : { summary: c.description }),
+    };
+    updateLead(enrichTarget.id, patch);
+    setViewLead(prev => prev && prev.id === enrichTarget.id ? { ...prev, ...patch } : prev);
+    setEnrichTarget(prev => prev ? { ...prev, ...patch } : prev);
+    showToast("Company info applied to profile");
+  }
+
+  function applyEnrichedPoc(poc: EnrichedPOC) {
+    if (!enrichTarget) return;
+    const patch: Partial<Lead> = {
+      profile: {
+        ...enrichTarget.profile,
+        poc_name:     poc.name,
+        poc_title:    poc.title || enrichTarget.profile?.poc_title,
+        poc_email:    poc.email || enrichTarget.profile?.poc_email,
+        poc_linkedin: poc.linkedin || enrichTarget.profile?.poc_linkedin,
+        enriched_at:     new Date().toISOString().slice(0, 10),
+        enrichment_from: poc.source,
+        last_updated:    new Date().toISOString().slice(0, 10),
+      },
+    };
+    updateLead(enrichTarget.id, patch);
+    setViewLead(prev => prev && prev.id === enrichTarget.id ? { ...prev, ...patch } : prev);
+    setEnrichTarget(prev => prev ? { ...prev, ...patch } : prev);
+    showToast(`${poc.name} set as first point of contact`);
+  }
+
+  // ── Naukri scout verification ──
+  const [naukriScout,   setNaukriScout]   = useState("");
+  const [naukriSending, setNaukriSending] = useState(false);
+
+  async function handleRequestNaukri(lead: Lead) {
+    if (naukriSending) return;
+    setNaukriSending(true);
+    const p = lead.profile ?? {};
+    try {
+      const created = await requestScoutVerification({
+        lead_id:      lead.id,
+        lead_name:    `${lead.first_name} ${lead.last_name}`.trim(),
+        company_name: lead.company_name,
+        poc_name:     p.poc_name,
+        poc_title:    p.poc_title,
+        poc_email:    p.poc_email,
+        poc_linkedin: p.poc_linkedin,
+        requested_by: userName,
+        assigned_to:  naukriScout || undefined,
+      });
+      const patch: Partial<Lead> = {
+        profile: { ...p, naukri_status: "pending_verification", last_updated: new Date().toISOString().slice(0, 10) },
+      };
+      updateLead(lead.id, patch);
+      setViewLead(prev => prev && prev.id === lead.id ? { ...prev, ...patch } : prev);
+      // Notify the assigned scout via an assigned follow-up (shows in their queue).
+      if (naukriScout) {
+        addFollowUp({
+          source: "task", source_id: `naukri-${created.id}`,
+          entity_name: `${lead.first_name} ${lead.last_name} · ${lead.company_name}`,
+          category: "naukri", note: "Verify this lead on Naukri",
+          follow_up_date: today, logged_at: nowISO(), done: false,
+          assignee: naukriScout, assigned_by: userName,
+        });
+      }
+      addActivity({
+        user: userName, entity_type: "lead", entity_name: `${lead.first_name} ${lead.last_name}`,
+        activity_type: "note",
+        description: `Requested Naukri verification${naukriScout ? ` from ${naukriScout}` : ""} for ${p.poc_name || lead.company_name}`,
+        created_at: nowISO(),
+      });
+      showToast("Naukri verification requested");
+    } catch (err) {
+      showToast((err as Error).message);
+    } finally {
+      setNaukriSending(false);
+    }
+  }
+
   if (ready && !canRead("Leads")) return <NoAccess module="Leads" />;
 
   return (
@@ -814,17 +1119,194 @@ export default function LeadsPage() {
 
       {/* ── Lead detail modal ── */}
       {viewLead && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50" onClick={() => setViewLead(null)}>
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50" onClick={() => { setViewLead(null); setDetailTab("overview"); setEditingProfile(false); }}>
           <div className="bg-[var(--surface)] border border-[var(--border)] rounded-2xl w-full max-w-lg mx-4 shadow-2xl max-h-[85vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
             <div className="flex items-center justify-between px-5 pt-5 pb-4 border-b border-[var(--border)]">
               <span className="text-[var(--tx2)] font-semibold text-sm">Lead Detail</span>
-              <button onClick={() => setViewLead(null)} className="text-[var(--tx5)] hover:text-[var(--tx3)] transition-colors"><X size={14} /></button>
+              <button onClick={() => { setViewLead(null); setDetailTab("overview"); setEditingProfile(false); }} className="text-[var(--tx5)] hover:text-[var(--tx3)] transition-colors"><X size={14} /></button>
             </div>
             <div className="flex flex-col items-center gap-2 pt-5 pb-4 px-5 border-b border-[var(--border)]">
               <div className="w-14 h-14 rounded-full bg-[var(--a-muted)] flex items-center justify-center text-[var(--a-text)] text-xl font-bold">{viewLead.first_name[0]}{viewLead.last_name[0]}</div>
               <p className="text-[var(--tx1)] font-semibold text-base text-center">{viewLead.first_name} {viewLead.last_name}</p>
               <span className={cn("inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs border capitalize font-medium", statusColors[viewLead.status])}>{statusIcons[viewLead.status]}{viewLead.status}</span>
             </div>
+
+            {/* Tab bar — only for roles that can read Lead Profiles */}
+            {canReadProfile && (
+              <div className="flex border-b border-[var(--border)]">
+                {(["overview", "profile"] as const).map(tab => (
+                  <button
+                    key={tab}
+                    onClick={() => { setDetailTab(tab); setEditingProfile(false); }}
+                    className={cn(
+                      "flex-1 py-2.5 text-xs font-medium transition-colors capitalize relative",
+                      detailTab === tab
+                        ? "text-[var(--a-text)]"
+                        : "text-[var(--tx5)] hover:text-[var(--tx3)]"
+                    )}
+                  >
+                    {tab === "overview" ? "Overview" : "Lead Profile"}
+                    {detailTab === tab && <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-[var(--a)] rounded-t" />}
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {/* ── Profile tab ── */}
+            {canReadProfile && detailTab === "profile" && (
+              <div className="px-5 py-4 space-y-5">
+
+                {/* Company Profile */}
+                <div>
+                  <div className="flex items-center justify-between mb-3">
+                    <p className="text-[var(--tx5)] text-xs font-medium flex items-center gap-1.5"><Building2 size={12} /> Company Profile</p>
+                    {canWriteProfile && !editingProfile && (
+                      <div className="flex items-center gap-3">
+                        <button onClick={() => runEnrichment(viewLead)} className="flex items-center gap-1 text-[10px] text-violet-400 hover:text-violet-300 transition-colors"><Sparkles size={10} /> Enrich from web</button>
+                        <button onClick={() => openProfileEdit(viewLead)} className="flex items-center gap-1 text-[10px] text-[var(--tx5)] hover:text-[var(--a-text)] transition-colors"><Pencil size={10} /> Edit</button>
+                      </div>
+                    )}
+                  </div>
+
+                  {editingProfile ? (
+                    <div className="space-y-3">
+                      <div><label className={labelCls}>Industry</label><input className={inputCls} placeholder="SaaS, FinTech, Healthcare…" value={profileForm.industry} onChange={e => setProfileForm(f => ({ ...f, industry: e.target.value }))} /></div>
+                      <div><label className={labelCls}>Company Size</label><input className={inputCls} placeholder="50-200 employees" value={profileForm.company_size} onChange={e => setProfileForm(f => ({ ...f, company_size: e.target.value }))} /></div>
+                      <div><label className={labelCls}>Website</label><input className={inputCls} placeholder="https://company.com" value={profileForm.website} onChange={e => setProfileForm(f => ({ ...f, website: e.target.value }))} /></div>
+                      <div><label className={labelCls}>Open Roles Being Hired</label><textarea rows={3} className={cn(inputCls, "resize-none")} placeholder="Frontend Developer, Sales Executive…" value={profileForm.open_roles} onChange={e => setProfileForm(f => ({ ...f, open_roles: e.target.value }))} /></div>
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      {[
+                        { icon: <Briefcase size={12} className="text-violet-400" />, label: "Industry",    value: viewLead.profile?.industry },
+                        { icon: <Users size={12} className="text-sky-400" />,       label: "Company Size", value: viewLead.profile?.company_size },
+                        { icon: <Globe size={12} className="text-emerald-400" />,   label: "Website",      value: viewLead.profile?.website },
+                      ].map(({ icon, label, value }) => (
+                        <div key={label} className="flex items-center gap-3 p-2.5 bg-[var(--surface2)] rounded-lg">
+                          <span className="shrink-0">{icon}</span>
+                          <div><p className="text-[10px] text-[var(--tx5)] mb-0.5">{label}</p><p className="text-[var(--tx3)] text-xs">{value || <span className="text-[var(--tx6)] italic">Not set</span>}</p></div>
+                        </div>
+                      ))}
+                      {viewLead.profile?.open_roles && (
+                        <div className="p-2.5 bg-[var(--surface2)] rounded-lg">
+                          <p className="text-[10px] text-[var(--tx5)] mb-1.5">Open Roles Being Hired</p>
+                          <div className="flex flex-wrap gap-1.5">
+                            {viewLead.profile.open_roles.split(/[,\n]+/).map(r => r.trim()).filter(Boolean).map(role => (
+                              <span key={role} className="px-2 py-0.5 bg-[var(--a-muted)] text-[var(--a-text)] text-[10px] rounded-full border border-[var(--a-border)]">{role}</span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {/* First Point of Contact */}
+                <div>
+                  <p className="text-[var(--tx5)] text-xs font-medium mb-2.5 flex items-center gap-1.5"><Star size={12} className="text-amber-400" /> First Point of Contact</p>
+                  {editingProfile ? (
+                    <div className="space-y-2">
+                      <div className="grid grid-cols-2 gap-2">
+                        <div><label className={labelCls}>Name</label><input className={inputCls} placeholder="Jane Smith" value={profileForm.poc_name} onChange={e => setProfileForm(f => ({ ...f, poc_name: e.target.value }))} /></div>
+                        <div><label className={labelCls}>Job Title</label><input className={inputCls} placeholder="HR Manager" value={profileForm.poc_title} onChange={e => setProfileForm(f => ({ ...f, poc_title: e.target.value }))} /></div>
+                      </div>
+                      <div><label className={labelCls}>Email</label><input className={inputCls} placeholder="jane@company.com" value={profileForm.poc_email} onChange={e => setProfileForm(f => ({ ...f, poc_email: e.target.value }))} /></div>
+                      <div><label className={labelCls}>LinkedIn</label><input className={inputCls} placeholder="linkedin.com/in/…" value={profileForm.poc_linkedin} onChange={e => setProfileForm(f => ({ ...f, poc_linkedin: e.target.value }))} /></div>
+                    </div>
+                  ) : viewLead.profile?.poc_name || viewLead.profile?.poc_title || viewLead.profile?.poc_email ? (
+                    <div className="p-3 bg-[var(--surface2)] rounded-xl space-y-1.5">
+                      {viewLead.profile?.poc_name && <p className="text-[var(--tx2)] text-xs font-medium flex items-center gap-1.5"><Users size={11} className="text-amber-400" /> {viewLead.profile.poc_name}</p>}
+                      {viewLead.profile?.poc_title && <p className="text-[var(--tx4)] text-[11px] flex items-center gap-1.5"><Briefcase size={10} /> {viewLead.profile.poc_title}</p>}
+                      {viewLead.profile?.poc_email && <a href={`mailto:${viewLead.profile.poc_email}`} className="text-sky-400 text-[11px] flex items-center gap-1.5 hover:underline"><Mail size={10} /> {viewLead.profile.poc_email}</a>}
+                      {viewLead.profile?.poc_linkedin && <a href={viewLead.profile.poc_linkedin.startsWith("http") ? viewLead.profile.poc_linkedin : `https://${viewLead.profile.poc_linkedin}`} target="_blank" rel="noreferrer" className="text-sky-400 text-[11px] flex items-center gap-1.5 hover:underline"><Link size={10} /> LinkedIn</a>}
+                    </div>
+                  ) : (
+                    <p className="text-[var(--tx6)] text-xs italic">No contact set. Use <span className="text-violet-400">Enrich from web</span> or Edit to add one.</p>
+                  )}
+                </div>
+
+                {/* Naukri Verification */}
+                <div>
+                  <p className="text-[var(--tx5)] text-xs font-medium mb-2.5 flex items-center gap-1.5"><ShieldCheck size={12} /> Naukri Verification</p>
+                  {editingProfile ? (
+                    <div className="space-y-2">
+                      <div>
+                        <label className={labelCls}>Verification Status</label>
+                        <select className={inputCls} value={profileForm.naukri_status} onChange={e => setProfileForm(f => ({ ...f, naukri_status: e.target.value as "" }))}>
+                          <option value="">Not Verified</option>
+                          <option value="pending_verification">Pending Verification</option>
+                          <option value="found">Found on Naukri</option>
+                          <option value="not_found">Not Found</option>
+                        </select>
+                      </div>
+                      <div><label className={labelCls}>Naukri Profile URL</label><input className={inputCls} placeholder="https://naukri.com/…" value={profileForm.naukri_url} onChange={e => setProfileForm(f => ({ ...f, naukri_url: e.target.value }))} /></div>
+                    </div>
+                  ) : (
+                    <div className="space-y-2.5">
+                      <div className="flex items-center gap-3 p-3 rounded-xl border">
+                        {!viewLead.profile?.naukri_status ? (
+                          <><AlertCircle size={14} className="text-[var(--tx5)] shrink-0" /><span className="text-[var(--tx5)] text-xs">Not verified yet</span></>
+                        ) : viewLead.profile.naukri_status === "pending_verification" ? (
+                          <><Clock size={14} className="text-amber-400 shrink-0" /><span className="text-amber-400 text-xs font-medium">Verification Pending with scout</span></>
+                        ) : viewLead.profile.naukri_status === "found" ? (
+                          <><ShieldCheck size={14} className="text-emerald-400 shrink-0" /><div><p className="text-emerald-400 text-xs font-medium">Found on Naukri</p>{viewLead.profile.naukri_url && <a href={viewLead.profile.naukri_url} target="_blank" rel="noreferrer" className="text-[10px] text-sky-400 hover:underline">{viewLead.profile.naukri_url}</a>}</div></>
+                        ) : (
+                          <><XCircle size={14} className="text-rose-400 shrink-0" /><span className="text-rose-400 text-xs font-medium">Not Found on Naukri</span></>
+                        )}
+                      </div>
+
+                      {/* Request verification from a scout (Leads-write roles) */}
+                      {canWrite && viewLead.profile?.naukri_status !== "pending_verification" && (
+                        <div className="flex items-center gap-2">
+                          {scoutUsers.length > 0 && (
+                            <select className={cn(inputCls, "flex-1")} value={naukriScout} onChange={e => setNaukriScout(e.target.value)}>
+                              <option value="">Any scout</option>
+                              {scoutUsers.map(s => { const n = `${s.first_name} ${s.last_name}`.trim(); return <option key={s.id} value={n}>{n}</option>; })}
+                            </select>
+                          )}
+                          <button onClick={() => handleRequestNaukri(viewLead)} disabled={naukriSending} className="flex items-center justify-center gap-1.5 px-3 py-2 bg-amber-500/10 border border-amber-500/30 text-amber-400 text-xs rounded-lg hover:bg-amber-500/20 transition-colors disabled:opacity-50 whitespace-nowrap">
+                            {naukriSending ? <Loader2 size={12} className="animate-spin" /> : <ShieldCheck size={12} />}
+                            {viewLead.profile?.naukri_status ? "Re-request" : "Request Verification"}
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {/* Internal Notes (AM read / BM+ write) */}
+                <div>
+                  <p className="text-[var(--tx5)] text-xs font-medium mb-2 flex items-center gap-1.5"><FileText size={12} /> Internal Notes <span className="text-[var(--tx6)] font-normal">(AM+ visible)</span></p>
+                  {editingProfile ? (
+                    <textarea rows={3} className={cn(inputCls, "resize-none")} placeholder="Internal observations, context for BM/Director…" value={profileForm.internal_notes} onChange={e => setProfileForm(f => ({ ...f, internal_notes: e.target.value }))} />
+                  ) : (
+                    <div className="p-2.5 bg-[var(--surface2)] rounded-lg min-h-[60px]">
+                      {viewLead.profile?.internal_notes
+                        ? <p className="text-[var(--tx3)] text-xs leading-relaxed whitespace-pre-wrap">{viewLead.profile.internal_notes}</p>
+                        : <p className="text-[var(--tx6)] text-xs italic">No internal notes.</p>
+                      }
+                    </div>
+                  )}
+                </div>
+
+                {/* Save / Cancel when editing */}
+                {editingProfile && (
+                  <div className="flex gap-3">
+                    <button onClick={() => setEditingProfile(false)} className="flex-1 py-2 bg-[var(--surface2)] border border-[var(--border)] text-[var(--tx4)] text-xs rounded-xl hover:border-[var(--a-border)] transition-colors">Cancel</button>
+                    <button onClick={() => handleSaveProfile(viewLead)} className="flex-1 py-2 bg-[var(--a)] text-white text-xs rounded-xl hover:bg-[var(--a-hover)] font-medium transition-colors">Save Profile</button>
+                  </div>
+                )}
+
+                {/* Last updated */}
+                {viewLead.profile?.last_updated && !editingProfile && (
+                  <p className="text-[var(--tx6)] text-[10px] text-right">Last updated: {viewLead.profile.last_updated}</p>
+                )}
+              </div>
+            )}
+
+            {/* ── Overview sections (hidden when Profile tab is active) ── */}
+            {(!canReadProfile || detailTab === "overview") && (
+            <>
             <div className="px-5 py-4 space-y-2.5 border-b border-[var(--border)]">
               <a href={`mailto:${viewLead.email}`} className="flex items-center gap-3 p-2.5 bg-[var(--surface2)] rounded-lg hover:bg-[var(--surface3)] transition-colors group">
                 <Mail size={13} className="text-[var(--a-text)] shrink-0" />
@@ -883,6 +1365,10 @@ export default function LeadsPage() {
                   <button onClick={() => { setApprovePreset(null); setApproveLead(viewLead); setViewLead(null); }} className="py-2 bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs rounded-lg hover:bg-emerald-500/20 transition-colors font-medium">✓ Approve</button>
                 )}
                 <button onClick={() => handleReject(viewLead.id)}  className="py-2 bg-rose-500/10 border border-rose-500/30 text-rose-400 text-xs rounded-lg hover:bg-rose-500/20 transition-colors font-medium">✕ Reject</button>
+                <button onClick={() => openEmailCompose(viewLead)} className="py-2 bg-sky-500/10 border border-sky-500/30 text-sky-400 text-xs rounded-lg hover:bg-sky-500/20 transition-colors font-medium col-span-2 flex items-center justify-center gap-2">
+                  <Mail size={13} /> {viewLead.email_sent_at ? "Send Another Email" : "Send Intro Email"}
+                  {viewLead.email_sent_at && <CheckCircle size={12} className="text-emerald-400" />}
+                </button>
                 <button onClick={() => startEditLead(viewLead)} className="py-2 bg-[var(--surface2)] border border-[var(--border)] text-[var(--tx4)] text-xs rounded-lg hover:border-[var(--a-border)] transition-colors col-span-2 flex items-center justify-center gap-2"><Pencil size={13} /> Edit Lead</button>
                 <button onClick={() => handleToggleFlag(viewLead)} className={cn("py-2 text-xs rounded-lg transition-colors font-medium border col-span-2 flex items-center justify-center gap-2", viewLead.flagged ? "bg-[var(--surface2)] border-[var(--border)] text-[var(--tx4)] hover:border-[var(--a-border)]" : "bg-rose-500/10 border-rose-500/30 text-rose-400 hover:bg-rose-500/20")}><Flag size={13} /> {viewLead.flagged ? "Remove Incorrect Flag" : "Flag as Incorrect"}</button>
               </div>
@@ -892,6 +1378,81 @@ export default function LeadsPage() {
             {/* Notes */}
             <div className="px-5 py-4 border-b border-[var(--border)]">
               <NotesSection entityType="lead" entityId={viewLead.id} entityName={`${viewLead.first_name} ${viewLead.last_name}`} canWrite={canWrite} />
+            </div>
+
+            {/* Meetings */}
+            <div className="px-5 py-4 border-b border-[var(--border)]">
+              <div className="flex items-center justify-between mb-3">
+                <p className="text-[var(--tx5)] text-xs font-medium flex items-center gap-1.5"><CalendarPlus size={12} /> Meetings</p>
+                {canWrite && (
+                  <button onClick={() => setMeetingModalLead(viewLead)} className="flex items-center gap-1 text-[10px] text-[var(--tx5)] hover:text-[var(--a-text)] transition-colors"><Plus size={11} /> Schedule</button>
+                )}
+              </div>
+              {leadMeetings.length === 0 ? (
+                <p className="text-[var(--tx6)] text-xs">No meetings scheduled.</p>
+              ) : (
+                <div className="space-y-2.5">
+                  {leadMeetings.map(m => (
+                    <div key={m.id} className="p-3 bg-[var(--surface2)] rounded-xl space-y-2">
+                      {/* Header: title + mode */}
+                      <div className="flex items-start justify-between gap-2">
+                        <p className="text-[var(--tx2)] text-xs font-medium leading-tight">{m.title}</p>
+                        <span className={cn("shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[9px] font-medium border",
+                          m.meeting_mode === "offline" ? "bg-amber-500/10 text-amber-400 border-amber-500/30" : "bg-sky-500/10 text-sky-400 border-sky-500/30")}>
+                          {m.meeting_mode === "offline" ? <MapPin size={9} /> : <Video size={9} />}
+                          {m.meeting_mode === "offline" ? "In person" : "Online"}
+                        </span>
+                      </div>
+
+                      {/* Date / time */}
+                      <div className="flex items-center gap-1.5 text-[10px] text-[var(--tx5)]">
+                        <Calendar size={10} /> {m.date}{m.time && ` · ${m.time}`}
+                      </div>
+
+                      {/* Platform / link or location */}
+                      {m.meeting_mode === "online"
+                        ? (m.meeting_platform || m.meeting_link) && (
+                            <div className="flex items-center gap-1.5 text-[10px]">
+                              <Video size={10} className="text-sky-400 shrink-0" />
+                              {m.meeting_link
+                                ? <a href={m.meeting_link} target="_blank" rel="noreferrer" className="text-sky-400 hover:underline truncate">{m.meeting_platform || "Join link"}</a>
+                                : <span className="text-[var(--tx4)]">{m.meeting_platform}</span>}
+                            </div>
+                          )
+                        : m.location && (
+                            <div className="flex items-center gap-1.5 text-[10px] text-[var(--tx4)]"><MapPin size={10} className="text-amber-400 shrink-0" /> {m.location}</div>
+                          )}
+
+                      {/* Attendees */}
+                      {m.attendees && m.attendees.length > 0 && (
+                        <div className="flex flex-wrap gap-1">
+                          {m.attendees.map((a, i) => (
+                            <span key={i} className={cn("inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[9px] border", a.is_external ? "bg-amber-500/10 text-amber-400 border-amber-500/30" : "bg-sky-500/10 text-sky-400 border-sky-500/30")}>
+                              {a.is_external ? <Building2 size={8} /> : <Users size={8} />}{a.name}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+
+                      {/* Recording */}
+                      {recordingEditId === m.id ? (
+                        <div className="flex items-center gap-1.5 pt-1">
+                          <input autoFocus className="flex-1 px-2 py-1 bg-[var(--surface)] border border-[var(--border)] rounded-lg text-[var(--tx2)] text-[10px] placeholder:text-[var(--tx6)] focus:outline-none focus:border-[var(--a-border)]" placeholder="Paste recording link…" value={recordingInput} onChange={e => setRecordingInput(e.target.value)} onKeyDown={e => { if (e.key === "Enter") saveRecording(m.id); }} />
+                          <button onClick={() => saveRecording(m.id)} className="px-2 py-1 bg-[var(--a)] text-white text-[10px] rounded-lg hover:bg-[var(--a-hover)] transition-colors">Save</button>
+                          <button onClick={() => { setRecordingEditId(null); setRecordingInput(""); }} className="px-2 py-1 bg-[var(--surface)] border border-[var(--border)] text-[var(--tx5)] text-[10px] rounded-lg hover:border-[var(--a-border)] transition-colors">Cancel</button>
+                        </div>
+                      ) : m.recording_url ? (
+                        <div className="flex items-center gap-2 pt-1">
+                          <a href={m.recording_url} target="_blank" rel="noreferrer" className="flex items-center gap-1.5 px-2 py-1 bg-rose-500/10 text-rose-400 border border-rose-500/30 text-[10px] rounded-lg hover:bg-rose-500/20 transition-colors"><Film size={10} /> View Recording</a>
+                          {canWrite && <button onClick={() => startRecordingEdit(m.id, m.recording_url)} className="text-[10px] text-[var(--tx5)] hover:text-[var(--a-text)] transition-colors"><Pencil size={10} /></button>}
+                        </div>
+                      ) : canWrite ? (
+                        <button onClick={() => startRecordingEdit(m.id)} className="flex items-center gap-1.5 text-[10px] text-[var(--tx5)] hover:text-rose-400 transition-colors pt-0.5"><Film size={10} /> Add recording link</button>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
 
             {/* Activity timeline */}
@@ -910,6 +1471,8 @@ export default function LeadsPage() {
                 </div>
               )}
             </div>
+            </>
+            )}
           </div>
         </div>
       )}
@@ -1001,6 +1564,196 @@ export default function LeadsPage() {
 
       {/* Log Response modal */}
       {responseModalLead && <LogResponseModal lead={responseModalLead} existing={responses[responseModalLead.id]} today={today} nowISO={now} onSave={saveResponse} onClose={() => setResponseModalLead(null)} />}
+
+      {/* Schedule Meeting modal (pre-linked to the lead) */}
+      {meetingModalLead && (
+        <MeetingModal
+          onClose={() => setMeetingModalLead(null)}
+          onSave={handleSaveMeeting}
+          userOptions={userOptions}
+          today={today}
+          lead={meetingModalLead}
+        />
+      )}
+
+      {/* Web enrichment results */}
+      {enrichTarget && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[80]" onClick={() => !enrichLoading && setEnrichTarget(null)}>
+          <div className="bg-[var(--surface)] border border-[var(--border)] rounded-2xl w-full max-w-lg mx-4 shadow-2xl max-h-[88vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-6 pt-6 pb-4 border-b border-[var(--border)]">
+              <div className="flex items-center gap-2.5">
+                <span className="w-8 h-8 rounded-lg bg-violet-500/15 flex items-center justify-center"><Sparkles size={18} className="text-violet-400" /></span>
+                <div>
+                  <h3 className="text-[var(--tx1)] font-semibold">Web Enrichment</h3>
+                  <p className="text-[var(--tx5)] text-xs mt-0.5">{enrichTarget.company_name || `${enrichTarget.first_name} ${enrichTarget.last_name}`}</p>
+                </div>
+              </div>
+              <button onClick={() => !enrichLoading && setEnrichTarget(null)} className="text-[var(--tx5)] hover:text-[var(--tx3)] transition-colors"><X size={16} /></button>
+            </div>
+
+            <div className="px-6 py-5">
+              {enrichLoading ? (
+                <div className="flex flex-col items-center justify-center py-12 gap-3">
+                  <Loader2 size={28} className="animate-spin text-violet-400" />
+                  <p className="text-[var(--tx5)] text-xs">Searching the web for company &amp; contacts…</p>
+                </div>
+              ) : enrichError && !enrichResult ? (
+                <div className="flex items-start gap-2 px-3 py-3 bg-rose-500/10 border border-rose-500/30 rounded-lg">
+                  <AlertCircle size={14} className="text-rose-400 shrink-0 mt-0.5" />
+                  <p className="text-rose-400 text-xs leading-relaxed">{enrichError}</p>
+                </div>
+              ) : enrichResult ? (
+                <div className="space-y-5">
+                  {/* Providers */}
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className="text-[10px] text-[var(--tx5)]">Sources:</span>
+                    {enrichResult.providers_available.map(p => (
+                      <span key={p} className={cn("text-[9px] px-1.5 py-0.5 rounded-full border capitalize", enrichResult.providers_used.includes(p) ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/30" : "bg-[var(--surface2)] text-[var(--tx6)] border-[var(--border)]")}>{p}{enrichResult.providers_used.includes(p) ? " ✓" : ""}</span>
+                    ))}
+                  </div>
+
+                  {/* Company card */}
+                  <div>
+                    <div className="flex items-center justify-between mb-2">
+                      <p className="text-[var(--tx5)] text-xs font-medium flex items-center gap-1.5"><Building2 size={12} /> Company</p>
+                      {canWriteProfile && (enrichResult.company.industry || enrichResult.company.size || enrichResult.company.website) && (
+                        <button onClick={applyEnrichedCompany} className="text-[10px] text-violet-400 hover:text-violet-300 transition-colors">Apply to profile</button>
+                      )}
+                    </div>
+                    <div className="p-3 bg-[var(--surface2)] rounded-xl space-y-1.5 text-xs">
+                      {enrichResult.company.industry && <p className="text-[var(--tx3)]"><span className="text-[var(--tx5)]">Industry:</span> {enrichResult.company.industry}</p>}
+                      {enrichResult.company.size && <p className="text-[var(--tx3)]"><span className="text-[var(--tx5)]">Size:</span> {enrichResult.company.size}</p>}
+                      {enrichResult.company.website && <a href={enrichResult.company.website} target="_blank" rel="noreferrer" className="text-sky-400 hover:underline flex items-center gap-1"><Globe size={10} /> {enrichResult.company.website}</a>}
+                      {enrichResult.company.location && <p className="text-[var(--tx3)]"><span className="text-[var(--tx5)]">Location:</span> {enrichResult.company.location}</p>}
+                      {enrichResult.company.description && <p className="text-[var(--tx4)] leading-relaxed border-t border-[var(--border)] pt-1.5 mt-1.5">{enrichResult.company.description}</p>}
+                      {!enrichResult.company.industry && !enrichResult.company.size && !enrichResult.company.website && !enrichResult.company.location && <p className="text-[var(--tx6)] italic">No company details found.</p>}
+                    </div>
+                  </div>
+
+                  {/* Contacts */}
+                  <div>
+                    <p className="text-[var(--tx5)] text-xs font-medium flex items-center gap-1.5 mb-2"><Users size={12} /> Points of Contact <span className="text-[var(--tx6)] font-normal">({enrichResult.pocs.length})</span></p>
+                    {enrichResult.pocs.length === 0 ? (
+                      <p className="text-[var(--tx6)] text-xs italic">No contacts found.</p>
+                    ) : (
+                      <div className="space-y-2">
+                        {enrichResult.pocs.map((poc, i) => (
+                          <div key={i} className="p-3 bg-[var(--surface2)] rounded-xl flex items-start gap-3">
+                            <div className="flex-1 min-w-0 space-y-1">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <p className="text-[var(--tx2)] text-xs font-medium">{poc.name}</p>
+                                {i === 0 && <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-amber-500/15 text-amber-400 border border-amber-500/30">Best match</span>}
+                                <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-[var(--surface)] text-[var(--tx6)] border border-[var(--border)] capitalize">{poc.source}</span>
+                              </div>
+                              {poc.title && <p className="text-[var(--tx4)] text-[11px] flex items-center gap-1"><Briefcase size={9} /> {poc.title}</p>}
+                              {poc.email && <p className="text-sky-400 text-[11px] flex items-center gap-1"><Mail size={9} /> {poc.email}</p>}
+                              {poc.linkedin && <a href={poc.linkedin.startsWith("http") ? poc.linkedin : `https://${poc.linkedin}`} target="_blank" rel="noreferrer" className="text-sky-400 text-[11px] flex items-center gap-1 hover:underline"><ExternalLink size={9} /> LinkedIn</a>}
+                            </div>
+                            {canWriteProfile && (
+                              <button onClick={() => applyEnrichedPoc(poc)} className="shrink-0 flex items-center gap-1 px-2.5 py-1.5 bg-amber-500/10 border border-amber-500/30 text-amber-400 text-[10px] rounded-lg hover:bg-amber-500/20 transition-colors"><Star size={10} /> Set as POC</button>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Per-provider errors (debugging) */}
+                  {enrichResult.provider_errors && (
+                    <div className="space-y-1">
+                      {Object.entries(enrichResult.provider_errors).map(([p, msg]) => (
+                        <p key={p} className="text-[10px] text-rose-400/80 flex items-start gap-1"><AlertCircle size={10} className="shrink-0 mt-0.5" /><span className="capitalize">{p}:</span> {msg}</p>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ) : null}
+            </div>
+
+            <div className="flex gap-3 px-6 pb-6">
+              <button onClick={() => setEnrichTarget(null)} disabled={enrichLoading} className="flex-1 py-2.5 bg-[var(--surface2)] border border-[var(--border)] text-[var(--tx4)] text-sm rounded-xl hover:border-[var(--a-border)] transition-colors disabled:opacity-50">Close</button>
+              <button onClick={() => runEnrichment(enrichTarget)} disabled={enrichLoading} className="flex-1 py-2.5 bg-[var(--a)] text-white text-sm rounded-xl hover:bg-[var(--a-hover)] font-medium transition-colors disabled:opacity-50 flex items-center justify-center gap-2">{enrichLoading ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />} Re-run</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Compose / send outreach email */}
+      {emailLead && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[80]" onClick={() => !emailSending && setEmailLead(null)}>
+          <div className="bg-[var(--surface)] border border-[var(--border)] rounded-2xl w-full max-w-lg mx-4 shadow-2xl max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-6 pt-6 pb-4 border-b border-[var(--border)]">
+              <div className="flex items-center gap-2.5">
+                <span className="w-8 h-8 rounded-lg bg-sky-500/15 flex items-center justify-center"><Mail size={18} className="text-sky-400" /></span>
+                <div>
+                  <h3 className="text-[var(--tx1)] font-semibold">Send Email</h3>
+                  <p className="text-[var(--tx5)] text-xs mt-0.5">Review before sending · auto-logged to activity</p>
+                </div>
+              </div>
+              <button onClick={() => !emailSending && setEmailLead(null)} className="text-[var(--tx5)] hover:text-[var(--tx3)] transition-colors"><X size={16} /></button>
+            </div>
+            <div className="px-6 py-5 space-y-4">
+              <div>
+                <label className={labelCls}>To</label>
+                <div className="flex items-center gap-2 px-3 py-2 bg-[var(--surface2)] border border-[var(--border)] rounded-lg">
+                  <Mail size={13} className="text-[var(--tx5)] shrink-0" />
+                  <span className="text-[var(--tx3)] text-xs truncate">{emailLead.first_name} {emailLead.last_name} · {emailLead.email}</span>
+                </div>
+              </div>
+              <div><label className={labelCls}>Subject *</label><input className={inputCls} value={emailForm.subject} onChange={e => setEmailForm(f => ({ ...f, subject: e.target.value }))} /></div>
+              <div><label className={labelCls}>Message *</label><textarea rows={9} className={cn(inputCls, "resize-none leading-relaxed")} value={emailForm.body} onChange={e => setEmailForm(f => ({ ...f, body: e.target.value }))} /></div>
+
+              {/* Propose a meeting (Accept/Decline + calendar) */}
+              <div className="rounded-xl border border-[var(--border)] overflow-hidden">
+                <button
+                  type="button"
+                  onClick={() => setEmailMeeting(m => ({ ...m, enabled: !m.enabled }))}
+                  className={cn("w-full flex items-center gap-2.5 px-3 py-2.5 text-left transition-colors", emailMeeting.enabled ? "bg-[var(--a-subtle)]" : "bg-[var(--surface2)] hover:bg-[var(--surface3)]")}
+                >
+                  <CalendarPlus size={14} className={emailMeeting.enabled ? "text-[var(--a-text)]" : "text-[var(--tx5)]"} />
+                  <div className="flex-1 min-w-0">
+                    <p className={cn("text-xs font-medium", emailMeeting.enabled ? "text-[var(--a-text)]" : "text-[var(--tx3)]")}>Propose a meeting</p>
+                    <p className="text-[var(--tx6)] text-[10px]">Adds Accept / Decline buttons + calendar invite</p>
+                  </div>
+                  <div className={cn("w-8 h-4.5 rounded-full transition-colors relative shrink-0", emailMeeting.enabled ? "bg-[var(--a)]" : "bg-[var(--surface3)]")} style={{ height: 18 }}>
+                    <div className={cn("absolute top-0.5 w-3.5 h-3.5 bg-white rounded-full transition-all", emailMeeting.enabled ? "left-[14px]" : "left-0.5")} />
+                  </div>
+                </button>
+
+                {emailMeeting.enabled && (
+                  <div className="px-3 py-3 space-y-3 border-t border-[var(--border)]">
+                    <div className="grid grid-cols-2 gap-2">
+                      <div><label className={labelCls}>Date *</label><input type="date" className={cn(inputCls, "[color-scheme:dark]")} value={emailMeeting.date} onChange={e => setEmailMeeting(m => ({ ...m, date: e.target.value }))} /></div>
+                      <div><label className={labelCls}>Time</label><input type="time" className={cn(inputCls, "[color-scheme:dark]")} value={emailMeeting.time} onChange={e => setEmailMeeting(m => ({ ...m, time: e.target.value }))} /></div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <button type="button" onClick={() => setEmailMeeting(m => ({ ...m, mode: "online" }))} className={cn("flex items-center justify-center gap-1.5 py-1.5 rounded-lg border text-xs font-medium transition-colors", emailMeeting.mode === "online" ? "bg-sky-500/15 border-sky-500/50 text-sky-400" : "bg-[var(--surface2)] border-[var(--border)] text-[var(--tx4)]")}><Video size={12} /> Online</button>
+                      <button type="button" onClick={() => setEmailMeeting(m => ({ ...m, mode: "offline" }))} className={cn("flex items-center justify-center gap-1.5 py-1.5 rounded-lg border text-xs font-medium transition-colors", emailMeeting.mode === "offline" ? "bg-amber-500/15 border-amber-500/50 text-amber-400" : "bg-[var(--surface2)] border-[var(--border)] text-[var(--tx4)]")}><MapPin size={12} /> In person</button>
+                    </div>
+                    {emailMeeting.mode === "online"
+                      ? <div><label className={labelCls}>Meeting link</label><input className={inputCls} placeholder="https://meet.google.com/…" value={emailMeeting.link} onChange={e => setEmailMeeting(m => ({ ...m, link: e.target.value }))} /></div>
+                      : <div><label className={labelCls}>Location</label><input className={inputCls} placeholder="UFT Office, Bangalore" value={emailMeeting.location} onChange={e => setEmailMeeting(m => ({ ...m, location: e.target.value }))} /></div>}
+                  </div>
+                )}
+              </div>
+
+              {emailError && (
+                <div className="flex items-start gap-2 px-3 py-2.5 bg-rose-500/10 border border-rose-500/30 rounded-lg">
+                  <AlertCircle size={13} className="text-rose-400 shrink-0 mt-0.5" />
+                  <p className="text-rose-400 text-xs leading-relaxed">{emailError}</p>
+                </div>
+              )}
+              <p className="text-[var(--tx6)] text-[10px]">Sent via your configured email service. A branded HTML version is generated automatically.</p>
+            </div>
+            <div className="flex gap-3 px-6 pb-6">
+              <button onClick={() => setEmailLead(null)} disabled={emailSending} className="flex-1 py-2.5 bg-[var(--surface2)] border border-[var(--border)] text-[var(--tx4)] text-sm rounded-xl hover:border-[var(--a-border)] transition-colors disabled:opacity-50">Cancel</button>
+              <button onClick={handleSendEmail} disabled={emailSending || !emailForm.subject.trim() || !emailForm.body.trim() || (emailMeeting.enabled && !emailMeeting.date)} className="flex-1 py-2.5 bg-[var(--a)] text-white text-sm rounded-xl hover:bg-[var(--a-hover)] font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2">
+                {emailSending ? <><Loader2 size={14} className="animate-spin" /> Sending…</> : <><Send size={14} /> {emailMeeting.enabled ? "Send Invite" : "Send Email"}</>}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Toast */}
       {toast && (

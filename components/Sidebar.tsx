@@ -5,7 +5,7 @@ import { usePathname } from "next/navigation";
 import {
   LayoutDashboard, Users, Building2, UserCircle, TrendingUp,
   Activity, CreditCard, ChevronRight, Zap,
-  CalendarClock,
+  CalendarClock, Search, ShieldCheck,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAppData } from "@/contexts/AppDataContext";
@@ -17,6 +17,8 @@ import { moduleForPath } from "@/lib/permissions";
 const navItems = [
   { label: "Dashboard",     href: "/",              icon: LayoutDashboard },
   { label: "Leads",         href: "/leads",         icon: Zap },
+  { label: "Quick Tab",     href: "/quick-tab",     icon: Search },
+  { label: "Naukri Verify", href: "/naukri-verify", icon: ShieldCheck },
   { label: "Contacts",      href: "/contacts",      icon: UserCircle },
   { label: "Accounts",      href: "/accounts",      icon: Building2 },
   { label: "Deals",         href: "/deals",         icon: TrendingUp },

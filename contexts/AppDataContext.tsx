@@ -35,8 +35,9 @@ export type ActivityItem = {
 // ── Context interface ─────────────────────────────────────────────
 
 interface AppDataContextType {
-  calendarEvents:   CalendarEvent[];
-  addCalendarEvent: (e: Omit<CalendarEvent, "id">) => void;
+  calendarEvents:      CalendarEvent[];
+  addCalendarEvent:    (e: Omit<CalendarEvent, "id">) => void;
+  updateCalendarEvent: (id: string, patch: Partial<CalendarEvent>) => void;
   followUps:        FollowUpItem[];
   addFollowUp:      (item: Omit<FollowUpItem, "id">) => void;
   toggleFollowUp:   (id: string) => void;
@@ -49,8 +50,9 @@ interface AppDataContextType {
 }
 
 const AppDataContext = createContext<AppDataContextType>({
-  calendarEvents:   [],
-  addCalendarEvent: () => {},
+  calendarEvents:      [],
+  addCalendarEvent:    () => {},
+  updateCalendarEvent: () => {},
   followUps:        [],
   addFollowUp:      () => {},
   toggleFollowUp:   () => {},
@@ -114,6 +116,11 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
     });
   }
 
+  function updateCalendarEvent(id: string, patch: Partial<CalendarEvent>) {
+    setCalendarEvents((prev) => prev.map((e) => (e.id === id ? { ...e, ...patch } : e)));
+    updateItem<CalendarEvent>("calendarEvents", id, patch).catch(() => {});
+  }
+
   function addFollowUp(item: Omit<FollowUpItem, "id">) {
     // De-duplicate: drop any existing follow-up for the same source entity,
     // both locally and on the server, before adding the new one.
@@ -159,7 +166,7 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
 
   return (
     <AppDataContext.Provider value={{
-      calendarEvents, addCalendarEvent,
+      calendarEvents, addCalendarEvent, updateCalendarEvent,
       followUps, addFollowUp, toggleFollowUp, updateFollowUp, deleteFollowUp,
       activities, addActivity, deleteActivity,
       loading,

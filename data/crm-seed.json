@@ -262,6 +262,15 @@
       "role": "Executive",
       "is_active": true,
       "last_login": "Never"
+    },
+    {
+      "id": "scout-1",
+      "first_name": "Scout-1",
+      "last_name": "",
+      "email": "scout-1@uftech.in",
+      "role": "Scout",
+      "is_active": true,
+      "last_login": "Never"
     }
   ],
   "roles": [
@@ -324,6 +333,21 @@
           "module": "Roles & Permissions",
           "read": true,
           "write": true
+        },
+        {
+          "module": "Lead Profiles",
+          "read": true,
+          "write": true
+        },
+        {
+          "module": "Quick Search",
+          "read": true,
+          "write": true
+        },
+        {
+          "module": "Naukri Verification",
+          "read": true,
+          "write": true
         }
       ]
     },
@@ -376,6 +400,21 @@
           "module": "Products",
           "read": true,
           "write": true
+        },
+        {
+          "module": "Lead Profiles",
+          "read": true,
+          "write": true
+        },
+        {
+          "module": "Quick Search",
+          "read": true,
+          "write": true
+        },
+        {
+          "module": "Naukri Verification",
+          "read": true,
+          "write": true
         }
       ]
     },
@@ -423,6 +462,21 @@
           "module": "Products",
           "read": true,
           "write": true
+        },
+        {
+          "module": "Lead Profiles",
+          "read": true,
+          "write": false
+        },
+        {
+          "module": "Quick Search",
+          "read": true,
+          "write": true
+        },
+        {
+          "module": "Naukri Verification",
+          "read": true,
+          "write": true
         }
       ]
     },
@@ -453,6 +507,28 @@
         },
         {
           "module": "Business Card",
+          "read": true,
+          "write": true
+        },
+        {
+          "module": "Quick Search",
+          "read": true,
+          "write": false
+        }
+      ]
+    },
+    {
+      "id": "scout",
+      "name": "Scout",
+      "description": "Talent-acquisition scout — verifies leads on Naukri.",
+      "permissions": [
+        {
+          "module": "Dashboard",
+          "read": true,
+          "write": false
+        },
+        {
+          "module": "Naukri Verification",
           "read": true,
           "write": true
         }

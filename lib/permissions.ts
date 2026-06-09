@@ -8,6 +8,9 @@
 export const MODULES = [
   "Dashboard",
   "Leads",
+  "Lead Profiles",
+  "Quick Search",
+  "Naukri Verification",
   "Contacts",
   "Accounts",
   "Deals",
@@ -55,6 +58,8 @@ export function roleRank(role: string): number {
 export const ROUTE_MODULE: Record<string, Module> = {
   "/":              "Dashboard",
   "/leads":         "Leads",
+  "/quick-tab":     "Quick Search",
+  "/naukri-verify": "Naukri Verification",
   "/contacts":      "Contacts",
   "/accounts":      "Accounts",
   "/deals":         "Deals",

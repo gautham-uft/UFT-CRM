@@ -109,6 +109,14 @@ export const revenueOverTime = [
 
 export type CalendarEventType = "meeting" | "task" | "call" | "deadline";
 
+// A person attending a meeting. `is_external` marks someone from the lead's
+// side (client) vs. an internal UFT team member.
+export type MeetingAttendee = {
+  name:         string;
+  email?:       string;
+  is_external?: boolean;
+};
+
 export type CalendarEvent = {
   id: string;
   title: string;
@@ -118,6 +126,14 @@ export type CalendarEvent = {
   assignee?: string;
   related_to?: string;
   done?: boolean;
+  // ── Meeting tracking (Feature 2) ──
+  meeting_mode?:     "online" | "offline";
+  meeting_platform?: string;            // online: Google Meet / Zoom / Teams / …
+  meeting_link?:     string;            // online: join URL
+  location?:         string;            // offline: place / address
+  attendees?:        MeetingAttendee[]; // everyone in the meeting
+  recording_url?:    string;            // link to the meeting recording
+  lead_id?:          string;            // links the meeting to a lead
 };
 
 export const mockCalendarEvents: CalendarEvent[] = [
