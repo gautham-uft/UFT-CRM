@@ -1,15 +1,19 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { mockContacts } from "@/lib/mock-data";
 import { Plus, Mail, Phone, Building2, X, CheckCircle, Trash2, AlertTriangle, Pencil, Flag } from "lucide-react";
 import { useAppData } from "@/contexts/AppDataContext";
 import { useCollection } from "@/hooks/useCollection";
 import { cn } from "@/lib/utils";
 import ColorFilter, { type ColorFilterValue, type RecordColor } from "@/components/ColorFilter";
+import { ColumnHeader, rowMatches, type ColFilter } from "@/components/ColumnHeader";
 import { usePermissions } from "@/contexts/PermissionsContext";
 import NoAccess from "@/components/NoAccess";
 import NotesSection from "@/components/NotesSection";
+import AiSummaryCard from "@/components/AiSummaryCard";
+import DumpPanel from "@/components/DumpPanel";
+import { apiUrl } from "@/lib/api-base";
 import { MapPin, Link, Cake, FileText } from "lucide-react";
 
 type Contact = (typeof mockContacts)[0] & {
@@ -18,6 +22,7 @@ type Contact = (typeof mockContacts)[0] & {
   address?:       string;
   linkedin?:      string;
   summary?:       string;
+  ai_summary?:    string;
 };
 
 const inputCls = "w-full px-3 py-2 bg-[var(--surface2)] border border-[var(--border)] rounded-lg text-[var(--tx2)] text-xs placeholder:text-[var(--tx6)] focus:outline-none focus:border-[var(--a-border)] transition-colors";
@@ -54,12 +59,60 @@ export default function ContactsPage() {
   const [logNote,       setLogNote]       = useState("");
   const [logType,       setLogType]       = useState<"call_log" | "email" | "note" | "meeting">("call_log");
   const [colorFilter,   setColorFilter]   = useState<ColorFilterValue>("all");
+  const [colFilters,    setColFilters]    = useState<Record<string, ColFilter>>({});
   const [toast,         setToast]         = useState("");
+  const [aiBusy,        setAiBusy]        = useState(false);
+  const [aiError,       setAiError]       = useState("");
+  const [highlightId,   setHighlightId]   = useState<string | null>(null);
 
   function showToast(msg: string) { setToast(msg); setTimeout(() => setToast(""), 3000); }
-  function closeDetail() { setSelected(null); setEditing(false); }
+  function closeDetail() { setSelected(null); setEditing(false); setAiError(""); }
 
-  const visible = contacts.filter(c => colorFilter === "all" || contactColor(c) === colorFilter);
+  async function generateContactSummary() {
+    if (!selected) return;
+    setAiBusy(true); setAiError("");
+    try {
+      const res = await fetch(apiUrl("/api/v1/ai/entity-summary"), {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ kind: "contact", id: selected.id }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error((data as { error?: string })?.error || `Failed (${res.status})`);
+      const summary = String((data as { summary?: string }).summary ?? "").trim();
+      updateContact(selected.id, { ai_summary: summary });
+      setSelected(prev => (prev ? { ...prev, ai_summary: summary } : prev));
+    } catch (e) {
+      setAiError(e instanceof Error ? e.message : "Failed to generate summary.");
+    } finally {
+      setAiBusy(false);
+    }
+  }
+
+  // Arriving from global search (?focus=<id>): clear the colour filter so the
+  // contact shows, then scroll to + highlight its row.
+  useEffect(() => {
+    const focus = new URLSearchParams(window.location.search).get("focus");
+    if (!focus || contacts.length === 0) return;
+    if (!contacts.find(x => x.id === focus)) return;
+    window.history.replaceState({}, "", "/contacts");
+    const t0 = setTimeout(() => { setColorFilter("all"); setHighlightId(focus); }, 0);
+    const t1 = setTimeout(() => document.getElementById(`contact-${focus}`)?.scrollIntoView({ behavior: "smooth", block: "center" }), 200);
+    const t2 = setTimeout(() => setHighlightId(null), 2800);
+    return () => { clearTimeout(t0); clearTimeout(t1); clearTimeout(t2); };
+  }, [contacts]);
+
+  const colGetters: Record<string, (c: Contact) => string> = {
+    name:    c => `${c.first_name} ${c.last_name}`,
+    title:   c => c.job_title ?? "",
+    account: c => c.account_name ?? "",
+    email:   c => c.email ?? "",
+    phone:   c => c.phone ?? "",
+  };
+  const visible = contacts.filter(c => (colorFilter === "all" || contactColor(c) === colorFilter) && rowMatches(c, colFilters, colGetters));
+  const setCol = (key: string, v: ColFilter) => setColFilters(f => {
+    const next = { ...f };
+    if (v.q || v.from || v.to) next[key] = v; else delete next[key];
+    return next;
+  });
 
   const relatedActivities = selected
     ? activities.filter(a =>
@@ -162,15 +215,15 @@ export default function ContactsPage() {
   return (
     <div className="h-[calc(100vh-112px)] flex flex-col gap-4">
       <div className="flex items-center justify-between gap-3 flex-wrap">
-        <span className="text-[var(--tx5)] text-sm">{visible.length} of {contacts.length} contacts</span>
         <div className="flex items-center gap-3">
+          <span className="text-[var(--tx5)] text-sm">{visible.length} of {contacts.length} contacts</span>
           <ColorFilter value={colorFilter} onChange={setColorFilter} />
-          {canWrite && (
-            <button onClick={() => setShowAddModal(true)} className="flex items-center gap-2 px-3 py-1.5 bg-[var(--a)] text-white text-xs rounded-lg hover:bg-[var(--a-hover)] transition-colors">
-              <Plus size={13} /> Add Contact
-            </button>
-          )}
         </div>
+        {canWrite && (
+          <button onClick={() => setShowAddModal(true)} className="flex items-center gap-2 px-3 py-1.5 bg-[var(--a)] text-white text-xs rounded-lg hover:bg-[var(--a-hover)] transition-colors">
+            <Plus size={13} /> Add Contact
+          </button>
+        )}
       </div>
 
       <div className="flex-1 overflow-auto">
@@ -178,14 +231,16 @@ export default function ContactsPage() {
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-[var(--border)]">
-                {["Name","Title","Account","Email","Phone"].map(h => (
-                  <th key={h} className="px-4 py-3 text-left text-xs text-[var(--tx5)] font-medium">{h}</th>
-                ))}
+                <th className="px-4 py-3 text-left"><ColumnHeader label="Name" value={colFilters.name ?? {}} onChange={v => setCol("name", v)} /></th>
+                <th className="px-4 py-3 text-left"><ColumnHeader label="Title" value={colFilters.title ?? {}} onChange={v => setCol("title", v)} /></th>
+                <th className="px-4 py-3 text-left"><ColumnHeader label="Account" value={colFilters.account ?? {}} onChange={v => setCol("account", v)} /></th>
+                <th className="px-4 py-3 text-left"><ColumnHeader label="Email" value={colFilters.email ?? {}} onChange={v => setCol("email", v)} /></th>
+                <th className="px-4 py-3 text-left"><ColumnHeader label="Phone" value={colFilters.phone ?? {}} onChange={v => setCol("phone", v)} /></th>
               </tr>
             </thead>
             <tbody className="divide-y divide-[var(--border)]">
               {visible.map(c => (
-                <tr key={c.id} onClick={() => { setSelected(c); setEditing(false); }} className={cn("transition-colors cursor-pointer", rowBg(c))}>
+                <tr id={`contact-${c.id}`} key={c.id} onClick={() => { setSelected(c); setEditing(false); setAiError(""); }} className={cn("transition-colors cursor-pointer", rowBg(c), highlightId === c.id && "ring-2 ring-inset ring-[var(--a)]")}>
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-2">
                       <div className="w-7 h-7 rounded-full bg-sky-500/20 flex items-center justify-center text-sky-400 text-xs font-medium">{c.first_name[0]}{c.last_name[0]}</div>
@@ -263,6 +318,7 @@ export default function ContactsPage() {
                   {selected.linkedin && <a href={selected.linkedin.startsWith("http") ? selected.linkedin : `https://${selected.linkedin}`} target="_blank" rel="noreferrer" className="flex items-center gap-3 p-2.5 bg-[var(--surface2)] rounded-lg hover:bg-[var(--surface3)] transition-colors"><Link size={14} className="text-sky-400 shrink-0" /><span className="text-[var(--tx3)] text-xs truncate">{selected.linkedin}</span></a>}
                   {selected.summary && <div className="flex items-start gap-3 p-2.5 bg-[var(--surface2)] rounded-lg"><FileText size={14} className="text-[var(--tx5)] shrink-0 mt-0.5" /><div><p className="text-[10px] text-[var(--tx5)] mb-0.5">Summary / About</p><p className="text-[var(--tx3)] text-xs leading-relaxed whitespace-pre-wrap">{selected.summary}</p></div></div>}
                 </div>
+                <AiSummaryCard summary={selected.ai_summary} busy={aiBusy} error={aiError} canWrite={canWrite} onGenerate={generateContactSummary} onSaveManual={(text) => { updateContact(selected.id, { ai_summary: text }); setSelected(prev => (prev ? { ...prev, ai_summary: text } : prev)); setAiError(""); showToast("Summary saved"); }} />
                 <div className="flex gap-2">
                   {canWrite && <button onClick={() => { setLogType("call_log"); setShowLogModal(true); }} className="flex-1 py-2 bg-[var(--a-muted)] border border-[var(--a-border)] text-[var(--a-text)] text-xs rounded-lg hover:bg-[var(--a-muted)] transition-colors">Log Call</button>}
                   <button onClick={() => window.open(`mailto:${selected.email}`, "_blank")} className="flex-1 py-2 bg-[var(--surface2)] border border-[var(--border)] text-[var(--tx4)] text-xs rounded-lg hover:border-[var(--a-border)] transition-colors">Send Email</button>
@@ -291,6 +347,7 @@ export default function ContactsPage() {
                   <button onClick={handleDeleteContact} className="flex items-center justify-center gap-2 py-2.5 bg-rose-500/10 border border-rose-500/30 text-rose-400 text-xs rounded-lg hover:bg-rose-500/20 transition-colors font-medium"><Trash2 size={13} /> Delete</button>
                 </div>
                 )}
+                <DumpPanel entityType="contact" entityId={selected.id} />
               </>
             )}
           </div>

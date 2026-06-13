@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { mockAccounts, mockContacts, mockDeals } from "@/lib/mock-data";
-import { Plus, CheckCircle, Trash2, X } from "lucide-react";
+import { Plus, CheckCircle, Trash2, X, List, Phone, Mail, MessageSquare, Calendar } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAppData, type ActivityItem } from "@/contexts/AppDataContext";
 import { usePermissions } from "@/contexts/PermissionsContext";
@@ -46,9 +46,11 @@ export default function ActivitiesPage() {
   const userName = `${currentUser.first_name} ${currentUser.last_name}`.trim();
   const myRank = roleRank(currentUser.role);
 
-  // A user may delete an activity they created, or one created by someone
-  // strictly below them in the hierarchy (Director > BM > AM > Executive).
+  // Deleting activities is limited to Account Manager and above. Within that, a
+  // user may delete an activity they created, or one created by someone strictly
+  // below them in the hierarchy (Director > BM > AM > Executive).
   function canDelete(a: ActivityItem): boolean {
+    if (myRank < roleRank("Account Manager")) return false;
     if (a.user === userName) return true;
     const creator = users.find(u => `${u.first_name} ${u.last_name}`.trim() === a.user);
     return roleRank(creator?.role ?? "") < myRank;
@@ -88,10 +90,17 @@ export default function ActivitiesPage() {
   return (
     <div className="space-y-5">
       <div className="flex items-center justify-between">
-        <div className="flex items-center gap-1 bg-[var(--surface)] border border-[var(--border)] rounded-lg p-1 w-fit">
-          {["all","call_log","email","note","meeting"].map(t => (
-            <button key={t} onClick={() => setFilter(t)} className={cn("px-3 py-1.5 rounded-md text-xs font-medium transition-colors", filter === t ? "bg-[var(--a)] text-white" : "text-[var(--tx4)] hover:text-[var(--tx2)]")}>
-              {t === "all" ? "All" : t === "call_log" ? "Calls" : t.charAt(0).toUpperCase() + t.slice(1) + "s"}
+        <div className="flex items-stretch gap-1 bg-[var(--surface)] border border-[var(--border)] rounded-lg p-1 w-fit">
+          {([
+            { key: "all",      label: "All",      Icon: List },
+            { key: "call_log", label: "Calls",    Icon: Phone },
+            { key: "email",    label: "Emails",   Icon: Mail },
+            { key: "note",     label: "Notes",    Icon: MessageSquare },
+            { key: "meeting",  label: "Meetings", Icon: Calendar },
+          ] as const).map(t => (
+            <button key={t.key} onClick={() => setFilter(t.key)} aria-label={t.label} className={cn("flex flex-col items-center gap-0.5 px-2 pt-1.5 pb-1 rounded-md min-w-[56px] transition-colors", filter === t.key ? "bg-[var(--a)] text-white" : "text-[var(--tx4)] hover:text-[var(--tx2)] hover:bg-[var(--surface2)]")}>
+              <t.Icon size={16} />
+              <span className="text-[10px] font-medium leading-none">{t.label}</span>
             </button>
           ))}
         </div>

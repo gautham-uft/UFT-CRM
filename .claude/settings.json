@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node -e \"const db=require\\('./data/crm-db.json'\\); const s=db.leads.map\\(l=>l.status\\); console.log\\('count',db.leads.length,'all new:', s.every\\(x=>x==='new'\\)\\);\")",
+      "PowerShell($p = \\(Get-NetTCPConnection -LocalPort 3000 -State Listen -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique\\); if \\($p\\) { Stop-Process -Id $p -Force; \"stopped dev server pid $p\" } else { \"port 3000 free\" })",
+      "Bash(rm -r \"app/api/[collection]\" app/api/enrich-lead app/api/quick-search app/api/send-email app/api/db-sync app/api/scout-request)",
+      "Bash(grep -rl \"@/lib/db\\\\\"\" app lib components contexts hooks)",
+      "Bash(rm lib/db.ts)",
+      "Bash(echo \"=== eslint exit: $? ===\")",
+      "Bash(node -e ' *)"
+    ]
+  }
+}

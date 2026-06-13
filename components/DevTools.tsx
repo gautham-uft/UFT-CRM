@@ -1,22 +1,20 @@
 "use client";
 
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
-  Cog, Clock, Database, UserCog, SlidersHorizontal,
-  ChevronLeft, ChevronRight, RotateCcw, Check, X, AlertTriangle,
-  Users, Shield, RefreshCw, CloudUpload, CloudDownload, Cloud, CloudOff,
+  Cog, Clock, UserCog, SlidersHorizontal,
+  ChevronLeft, ChevronRight, RotateCcw, Check, X,
+  Users, Shield, Database, CloudDownload, CloudUpload, AlertTriangle,
 } from "lucide-react";
 import { useNow } from "@/contexts/NowContext";
 import { useCurrentUser, DEFAULT_USER, type CurrentUser } from "@/contexts/CurrentUserContext";
 import { usePermissions } from "@/contexts/PermissionsContext";
 import { useCollection } from "@/hooks/useCollection";
-import { resetDatabase } from "@/lib/api";
-import { subscribe as syncSubscribe, getStatus as getSyncStatus, checkDivergence, syncLocalToCloud, syncCloudToLocal } from "@/lib/sync-store";
-import { subscribeMode, getModeSnapshot, getModeServerSnapshot, setOnlineMode } from "@/lib/data-mode";
+import { persistentAvailable, syncDatabases, type SyncDirection } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
-type View = "menu" | "time" | "db" | "user" | "settings" | "sync";
+type View = "menu" | "time" | "user" | "settings" | "db";
 
 // "2/3 gears within a square" — two meshing cogs inside a rounded square.
 function GearSquare() {
@@ -56,23 +54,10 @@ export default function DevTools() {
   const canSeeUsers = canRead("User Management");
   const canSeeRoles = canRead("Roles & Permissions");
 
-  // Offline/cloud sync status (red indicator when local and cloud diverge).
-  const sync = useSyncExternalStore(syncSubscribe, getSyncStatus, getSyncStatus);
-  const onlineMode = useSyncExternalStore(subscribeMode, getModeSnapshot, getModeServerSnapshot);
-  const diverged = !onlineMode && sync.diverged;
-
-  function toggleOnlineMode() {
-    setOnlineMode(!onlineMode);
-    window.location.reload(); // reload so all data re-loads from the chosen source
-  }
-
-  // Status indicator beside the bar: red = out of sync, blue = time overridden,
-  // green = normal. (Out-of-sync takes priority over a time override.)
-  const indicator = diverged
-    ? { color: "bg-rose-500",    glow: "shadow-[0_0_6px_1px_rgba(244,63,94,0.8)]",  label: "Database out of sync — open Dev Tools → Sync Data", pulse: true }
-    : isOverridden
-      ? { color: "bg-blue-500",    glow: "shadow-[0_0_6px_1px_rgba(59,130,246,0.8)]", label: "Date & time overridden", pulse: false }
-      : { color: "bg-emerald-500", glow: "shadow-[0_0_6px_1px_rgba(16,185,129,0.8)]", label: "Local and cloud in sync", pulse: false };
+  // Status indicator beside the bar: blue = time overridden, green = normal.
+  const indicator = isOverridden
+    ? { color: "bg-blue-500",    glow: "shadow-[0_0_6px_1px_rgba(59,130,246,0.8)]", label: "Date & time overridden", pulse: false }
+    : { color: "bg-emerald-500", glow: "shadow-[0_0_6px_1px_rgba(16,185,129,0.8)]", label: "Normal", pulse: false };
 
   const [open, setOpen] = useState(false);
   const [view, setView] = useState<View>("menu");
@@ -81,7 +66,12 @@ export default function DevTools() {
   // Drafts (apply/confirm pattern — nothing changes until you Apply).
   const [timeDraft, setTimeDraft] = useState("");
   const [userDraft, setUserDraft] = useState<string>(currentUser.id);
-  const [resetting, setResetting] = useState(false);
+
+  // Database reset/sync state.
+  const [hasPersistent, setHasPersistent] = useState(false);
+  const [pendingDir, setPendingDir] = useState<SyncDirection | null>(null);
+  const [syncing, setSyncing] = useState(false);
+  const [syncMsg, setSyncMsg] = useState("");
 
   useEffect(() => {
     function handler(e: MouseEvent) {
@@ -91,13 +81,36 @@ export default function DevTools() {
     return () => document.removeEventListener("mousedown", handler);
   }, []);
 
+  useEffect(() => {
+    let active = true;
+    persistentAvailable().then((ok) => active && setHasPersistent(ok));
+    return () => { active = false; };
+  }, []);
+
+  async function runSync(dir: SyncDirection) {
+    setSyncing(true);
+    setSyncMsg("");
+    try {
+      await syncDatabases(dir);
+      // Reset (persistent → working) changes the live data → reload so every
+      // page re-fetches. Save (working → persistent) leaves the app unchanged.
+      if (dir === "persistent-to-working") { window.location.reload(); return; }
+      setPendingDir(null);
+      setSyncMsg("Working database saved to persistent.");
+    } catch (e) {
+      setSyncMsg(e instanceof Error ? e.message : "Sync failed.");
+    } finally {
+      setSyncing(false);
+    }
+  }
+
   function close() { setOpen(false); }
 
   // When (re)opening a sub-view, seed its draft from the live value.
   function go(v: View) {
     if (v === "time") setTimeDraft(now);
     if (v === "user") setUserDraft(currentUser.id);
-    if (v === "sync") void checkDivergence(); // refresh the comparison
+    if (v === "db") { setPendingDir(null); setSyncMsg(""); }
     setView(v);
   }
 
@@ -130,18 +143,6 @@ export default function DevTools() {
     setView("menu");
   }
 
-  async function confirmReset() {
-    setResetting(true);
-    await resetDatabase();
-    window.location.reload();
-  }
-
-  async function doSync(dir: "up" | "down") {
-    if (dir === "up") await syncLocalToCloud();
-    else { await syncCloudToLocal(); window.location.reload(); return; }
-    setView("menu");
-  }
-
   return (
     <div className="relative" ref={ref}>
       <button
@@ -171,10 +172,9 @@ export default function DevTools() {
             <span className="text-xs font-semibold text-[var(--tx1)] flex items-center gap-1.5">
               {view === "menu" && <><GearSquare /> Dev Tools</>}
               {view === "time" && "Current Date & Time"}
-              {view === "db" && "Reset Database"}
               {view === "user" && "Switch User"}
               {view === "settings" && "Settings"}
-              {view === "sync" && "Sync Data"}
+              {view === "db" && "Databases"}
             </span>
           </div>
 
@@ -182,23 +182,6 @@ export default function DevTools() {
             {/* ── Menu ── */}
             {view === "menu" && (
               <div className="space-y-1.5">
-                {/* Online Mode toggle — direct cloud vs offline-first local copy */}
-                <button onClick={toggleOnlineMode} className={cn(rowCls, onlineMode && "border-emerald-500/50 bg-emerald-500/5")}>
-                  <span className={cn(iconBoxCls, onlineMode && "bg-emerald-500/15")}>
-                    {onlineMode ? <Cloud size={14} className="text-emerald-400" /> : <CloudOff size={14} className="text-[var(--tx4)]" />}
-                  </span>
-                  <span className="flex-1 min-w-0">
-                    <span className="block text-xs font-medium text-[var(--tx2)]">Online Mode</span>
-                    <span className="block text-[10px] text-[var(--tx5)] truncate">{onlineMode ? "Connected directly to the cloud" : "Using local copy (offline-first)"}</span>
-                  </span>
-                  <span className={cn(
-                    "relative w-9 h-5 rounded-full transition-colors shrink-0",
-                    onlineMode ? "bg-emerald-500" : "bg-[var(--surface3)]"
-                  )}>
-                    <span className={cn("absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all", onlineMode ? "left-[18px]" : "left-0.5")} />
-                  </span>
-                </button>
-
                 <button onClick={() => go("time")} title={fmtNow(now)} className={rowCls}>
                   <span className={iconBoxCls}><Clock size={14} className="text-[var(--a-text)]" /></span>
                   <span className="flex-1 min-w-0">
@@ -206,33 +189,6 @@ export default function DevTools() {
                     <span className="block text-[10px] text-[var(--tx5)] truncate">{fmtNow(now)}</span>
                   </span>
                   {isOverridden && <span className="text-[9px] text-[var(--a-text)] font-semibold uppercase tracking-wide">Overridden</span>}
-                  <ChevronRight size={14} className="text-[var(--tx5)] shrink-0" />
-                </button>
-
-                {!onlineMode && (
-                <button onClick={() => go("sync")} className={cn(rowCls, diverged && "border-rose-500/60 bg-rose-500/5")}>
-                  <span className={cn(iconBoxCls, diverged && "bg-rose-500/15")}>
-                    <RefreshCw size={14} className={diverged ? "text-rose-400" : "text-[var(--a-text)]"} />
-                  </span>
-                  <span className="flex-1 min-w-0">
-                    <span className="block text-xs font-medium text-[var(--tx2)] flex items-center gap-1.5">
-                      Sync Data
-                      {diverged && <span className="w-1.5 h-1.5 rounded-full bg-rose-500 animate-pulse" />}
-                    </span>
-                    <span className="block text-[10px] text-[var(--tx5)] truncate">
-                      {sync.checking ? "Checking…" : diverged ? "Local and cloud differ" : "Local and cloud in sync"}
-                    </span>
-                  </span>
-                  <ChevronRight size={14} className="text-[var(--tx5)] shrink-0" />
-                </button>
-                )}
-
-                <button onClick={() => go("db")} className={rowCls}>
-                  <span className={iconBoxCls}><Database size={14} className="text-[var(--a-text)]" /></span>
-                  <span className="flex-1 min-w-0">
-                    <span className="block text-xs font-medium text-[var(--tx2)]">Reset Database</span>
-                    <span className="block text-[10px] text-[var(--tx5)] truncate">Restore the persistent baseline</span>
-                  </span>
                   <ChevronRight size={14} className="text-[var(--tx5)] shrink-0" />
                 </button>
 
@@ -244,6 +200,17 @@ export default function DevTools() {
                   </span>
                   <ChevronRight size={14} className="text-[var(--tx5)] shrink-0" />
                 </button>
+
+                {hasPersistent && (
+                  <button onClick={() => go("db")} className={rowCls}>
+                    <span className={iconBoxCls}><Database size={14} className="text-[var(--a-text)]" /></span>
+                    <span className="flex-1 min-w-0">
+                      <span className="block text-xs font-medium text-[var(--tx2)]">Databases</span>
+                      <span className="block text-[10px] text-[var(--tx5)] truncate">Reset & sync working ↔ persistent</span>
+                    </span>
+                    <ChevronRight size={14} className="text-[var(--tx5)] shrink-0" />
+                  </button>
+                )}
 
                 {(canSeeUsers || canSeeRoles) && (
                   <button onClick={() => go("settings")} className={rowCls}>
@@ -281,24 +248,6 @@ export default function DevTools() {
                 <div className="flex gap-2 pt-1">
                   <button onClick={() => setView("menu")} className={cancelBtn}><X size={13} /> Cancel</button>
                   <button onClick={applyTime} disabled={!timeDraft} className={applyBtn}><Check size={13} /> Apply</button>
-                </div>
-              </div>
-            )}
-
-            {/* ── Reset database ── */}
-            {view === "db" && (
-              <div className="space-y-3">
-                <div className="flex items-start gap-2.5 p-3 rounded-lg bg-rose-500/10 border border-rose-500/30">
-                  <AlertTriangle size={15} className="text-rose-400 shrink-0 mt-0.5" />
-                  <p className="text-[11px] text-[var(--tx3)] leading-relaxed">
-                    This clears the working database and restores the persistent baseline (leads, users, roles). Everything created this session is dropped.
-                  </p>
-                </div>
-                <div className="flex gap-2">
-                  <button onClick={() => setView("menu")} disabled={resetting} className={cancelBtn}><X size={13} /> Reject</button>
-                  <button onClick={confirmReset} disabled={resetting} className={cn(applyBtn, "bg-rose-500 hover:bg-rose-400")}>
-                    {resetting ? <RotateCcw size={13} className="animate-spin" /> : <Check size={13} />} Confirm
-                  </button>
                 </div>
               </div>
             )}
@@ -364,53 +313,58 @@ export default function DevTools() {
               </div>
             )}
 
-            {/* ── Sync data (Local ↔ Cloud) ── */}
-            {view === "sync" && (
+            {/* ── Databases (reset / sync working ↔ persistent) ── */}
+            {view === "db" && (
               <div className="space-y-3">
-                <div className={cn(
-                  "flex items-start gap-2.5 p-3 rounded-lg border",
-                  diverged ? "bg-rose-500/10 border-rose-500/30" : "bg-[var(--surface2)] border-[var(--border)]"
-                )}>
-                  <span className={cn("w-2 h-2 rounded-full mt-1 shrink-0", sync.checking ? "bg-amber-400 animate-pulse" : diverged ? "bg-rose-500" : "bg-emerald-400")} />
-                  <p className="text-[11px] text-[var(--tx3)] leading-relaxed">
-                    {sync.checking
-                      ? "Comparing the local copy with the cloud…"
-                      : diverged
-                        ? "Your local copy and the cloud database differ. Choose a direction to reconcile them."
-                        : "Local copy and cloud are in sync."}
-                  </p>
-                </div>
+                <p className="text-[10px] text-[var(--tx5)] leading-relaxed">
+                  The <span className="text-[var(--tx3)] font-medium">working</span> database is what the app uses.
+                  The <span className="text-[var(--tx3)] font-medium">persistent</span> one is a saved baseline.
+                </p>
 
-                <button
-                  onClick={() => doSync("up")}
-                  disabled={sync.syncing}
-                  className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left bg-[var(--surface2)] border border-[var(--border)] hover:border-[var(--a-border)] transition-colors disabled:opacity-50"
-                >
-                  <span className={iconBoxCls}><CloudUpload size={14} className="text-[var(--a-text)]" /></span>
-                  <span className="flex-1 min-w-0">
-                    <span className="block text-xs font-medium text-[var(--tx2)]">Local → Cloud</span>
-                    <span className="block text-[10px] text-[var(--tx5)]">Push this device&apos;s data to the cloud (overwrites cloud)</span>
-                  </span>
-                </button>
+                {pendingDir ? (
+                  <div className="space-y-3">
+                    <div className="flex items-start gap-2.5 p-3 rounded-lg bg-rose-500/10 border border-rose-500/30">
+                      <AlertTriangle size={15} className="text-rose-400 shrink-0 mt-0.5" />
+                      <p className="text-[11px] text-[var(--tx3)] leading-relaxed">
+                        {pendingDir === "persistent-to-working"
+                          ? "This clears the working database and restores it from the persistent baseline. Unsaved working changes are lost."
+                          : "This overwrites the persistent baseline with the current working database. The previous baseline is replaced."}
+                      </p>
+                    </div>
+                    <div className="flex gap-2">
+                      <button onClick={() => setPendingDir(null)} disabled={syncing} className={cancelBtn}><X size={13} /> Cancel</button>
+                      <button onClick={() => runSync(pendingDir)} disabled={syncing} className={cn(applyBtn, "bg-rose-500 hover:bg-rose-400")}>
+                        {syncing ? <RotateCcw size={13} className="animate-spin" /> : <Check size={13} />} Confirm
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    <button
+                      onClick={() => setPendingDir("persistent-to-working")}
+                      className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left bg-[var(--surface2)] border border-[var(--border)] hover:border-[var(--a-border)] transition-colors"
+                    >
+                      <span className={iconBoxCls}><CloudDownload size={14} className="text-[var(--a-text)]" /></span>
+                      <span className="flex-1 min-w-0">
+                        <span className="block text-xs font-medium text-[var(--tx2)]">Reset · Persistent → Working</span>
+                        <span className="block text-[10px] text-[var(--tx5)]">Clear working, restore from the baseline</span>
+                      </span>
+                    </button>
 
-                <button
-                  onClick={() => doSync("down")}
-                  disabled={sync.syncing}
-                  className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left bg-[var(--surface2)] border border-[var(--border)] hover:border-[var(--a-border)] transition-colors disabled:opacity-50"
-                >
-                  <span className={iconBoxCls}><CloudDownload size={14} className="text-[var(--a-text)]" /></span>
-                  <span className="flex-1 min-w-0">
-                    <span className="block text-xs font-medium text-[var(--tx2)]">Cloud → Local</span>
-                    <span className="block text-[10px] text-[var(--tx5)]">Pull the cloud data to this device (overwrites local)</span>
-                  </span>
-                </button>
+                    <button
+                      onClick={() => setPendingDir("working-to-persistent")}
+                      className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left bg-[var(--surface2)] border border-[var(--border)] hover:border-[var(--a-border)] transition-colors"
+                    >
+                      <span className={iconBoxCls}><CloudUpload size={14} className="text-[var(--a-text)]" /></span>
+                      <span className="flex-1 min-w-0">
+                        <span className="block text-xs font-medium text-[var(--tx2)]">Save · Working → Persistent</span>
+                        <span className="block text-[10px] text-[var(--tx5)]">Update the baseline from working</span>
+                      </span>
+                    </button>
 
-                <div className="flex gap-2 pt-1">
-                  <button onClick={() => setView("menu")} className={cancelBtn}><X size={13} /> Close</button>
-                  <button onClick={() => checkDivergence()} disabled={sync.checking || sync.syncing} className={applyBtn}>
-                    <RefreshCw size={13} className={sync.checking ? "animate-spin" : ""} /> Re-check
-                  </button>
-                </div>
+                    {syncMsg && <p className="text-[10px] text-[var(--a-text)] px-1">{syncMsg}</p>}
+                  </div>
+                )}
               </div>
             )}
           </div>

@@ -1,12 +1,13 @@
 "use client";
 
 import { createContext, useContext, useState } from "react";
-import { CalendarPlus, ClipboardList, StickyNote, X } from "lucide-react";
+import { ClipboardList, StickyNote, X } from "lucide-react";
 import { useAppData } from "@/contexts/AppDataContext";
 import { useCurrentUser } from "@/contexts/CurrentUserContext";
 import { useNow } from "@/contexts/NowContext";
 import { useCollection } from "@/hooks/useCollection";
 import SearchableSelect from "@/components/SearchableSelect";
+import MeetingWizard, { type MeetingWizardResult } from "@/components/MeetingWizard";
 import type { Note, NoteEntity } from "@/components/NotesSection";
 
 const inputCls = "w-full px-3 py-2 bg-[var(--surface2)] border border-[var(--border)] rounded-lg text-[var(--tx2)] text-xs placeholder:text-[var(--tx6)] focus:outline-none focus:border-[var(--a-border)] transition-colors";
@@ -24,7 +25,7 @@ const QuickActionsContext = createContext<QuickActionsContextType>({
   openScheduleMeeting: () => {}, openAssignTask: () => {}, openAddNote: () => {},
 });
 
-type AppUser = { id: string; first_name: string; last_name: string; role: string };
+type AppUser = { id: string; first_name: string; last_name: string; role: string; email?: string };
 
 export function QuickActionsProvider({ children }: { children: React.ReactNode }) {
   const { addCalendarEvent, addFollowUp, addActivity } = useAppData();
@@ -47,16 +48,11 @@ export function QuickActionsProvider({ children }: { children: React.ReactNode }
 
   // ── Schedule meeting ──
   const [meetingOpen, setMeetingOpen] = useState(false);
-  const [meeting, setMeeting] = useState({ title: "", date: "", time: "", assignee: "", related_to: "" });
 
-  function submitMeeting() {
-    if (!meeting.title.trim() || !meeting.date) return;
-    addCalendarEvent({
-      title: meeting.title.trim(), date: meeting.date, time: meeting.time || undefined,
-      type: "meeting", assignee: meeting.assignee || undefined, related_to: meeting.related_to.trim() || undefined,
-    });
-    addActivity({ user: author, entity_type: "meeting", entity_name: meeting.related_to.trim() || meeting.title.trim(), activity_type: "meeting", description: `Scheduled meeting: ${meeting.title.trim()}${meeting.date ? ` on ${meeting.date}` : ""}`, created_at: nowISO() });
-    setMeeting({ title: "", date: "", time: "", assignee: "", related_to: "" });
+  function finishMeeting({ meeting }: MeetingWizardResult) {
+    // addCalendarEvent logs the activity + follow-up; the wizard already sent any
+    // client email. Just persist the meeting and close.
+    if (meeting) addCalendarEvent(meeting);
     setMeetingOpen(false);
   }
 
@@ -97,7 +93,7 @@ export function QuickActionsProvider({ children }: { children: React.ReactNode }
   }
 
   const api: QuickActionsContextType = {
-    openScheduleMeeting: () => { setMeeting(m => ({ ...m, date: m.date || today })); setMeetingOpen(true); },
+    openScheduleMeeting: () => setMeetingOpen(true),
     openAssignTask:      () => setTaskOpen(true),
     openAddNote:         (prefill) => {
       if (prefill) { setNote({ entityType: prefill.entityType, entityId: prefill.entityId, entityName: prefill.entityName, text: "" }); setNoteLocked(true); }
@@ -110,22 +106,15 @@ export function QuickActionsProvider({ children }: { children: React.ReactNode }
     <QuickActionsContext.Provider value={api}>
       {children}
 
-      {/* ── Schedule Meeting ── */}
+      {/* ── Schedule Meeting (Internal / Client chooser → wizard) ── */}
       {meetingOpen && (
-        <Modal title="Schedule Meeting" icon={<CalendarPlus size={18} className="text-[var(--a-text)]" />} onClose={() => setMeetingOpen(false)}>
-          <div className="space-y-4">
-            <div><label className={labelCls}>Title *</label><input className={inputCls} placeholder="Demo call with Acme" value={meeting.title} onChange={e => setMeeting(m => ({ ...m, title: e.target.value }))} /></div>
-            <div className="grid grid-cols-2 gap-3">
-              <div><label className={labelCls}>Date *</label><input type="date" className={inputCls} value={meeting.date} onChange={e => setMeeting(m => ({ ...m, date: e.target.value }))} /></div>
-              <div><label className={labelCls}>Time</label><input type="time" className={inputCls} value={meeting.time} onChange={e => setMeeting(m => ({ ...m, time: e.target.value }))} /></div>
-            </div>
-            <div><label className={labelCls}>Attendee</label>
-              <SearchableSelect value={meeting.assignee} onChange={v => setMeeting(m => ({ ...m, assignee: v }))} placeholder="Select a person (optional)" options={userOptions} />
-            </div>
-            <div><label className={labelCls}>Related to</label><input className={inputCls} placeholder="Account, deal, etc. (optional)" value={meeting.related_to} onChange={e => setMeeting(m => ({ ...m, related_to: e.target.value }))} /></div>
-          </div>
-          <Actions onCancel={() => setMeetingOpen(false)} onConfirm={submitMeeting} disabled={!meeting.title.trim() || !meeting.date} confirmLabel="Schedule" />
-        </Modal>
+        <MeetingWizard
+          users={users}
+          today={today}
+          currentUser={currentUser}
+          onClose={() => setMeetingOpen(false)}
+          onFinish={finishMeeting}
+        />
       )}
 
       {/* ── Assign Task ── */}

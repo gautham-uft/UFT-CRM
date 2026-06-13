@@ -1,16 +1,20 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { mockAccounts, mockContacts } from "@/lib/mock-data";
-import { Plus, Globe, Users, TrendingUp, X, Building2, CheckCircle, Trash2, AlertTriangle, Pencil, Flag } from "lucide-react";
+import { Plus, Globe, Users, TrendingUp, X, Building2, CheckCircle, Trash2, AlertTriangle, Pencil, Flag, Filter } from "lucide-react";
 import { useCollection } from "@/hooks/useCollection";
 import { cn } from "@/lib/utils";
 import ColorFilter, { type ColorFilterValue, type RecordColor } from "@/components/ColorFilter";
+import { rowMatches, type ColFilter } from "@/components/ColumnHeader";
 import { usePermissions } from "@/contexts/PermissionsContext";
 import NoAccess from "@/components/NoAccess";
 import NotesSection from "@/components/NotesSection";
+import AiSummaryCard from "@/components/AiSummaryCard";
+import DumpPanel from "@/components/DumpPanel";
+import { apiUrl } from "@/lib/api-base";
 
-type Account = (typeof mockAccounts)[0] & { flagged?: boolean };
+type Account = (typeof mockAccounts)[0] & { flagged?: boolean; ai_summary?: string };
 type Contact = (typeof mockContacts)[0];
 
 const inputCls = "w-full px-3 py-2 bg-[var(--surface2)] border border-[var(--border)] rounded-lg text-[var(--tx2)] text-xs placeholder:text-[var(--tx6)] focus:outline-none focus:border-[var(--a-border)] transition-colors";
@@ -43,12 +47,69 @@ export default function AccountsPage() {
   const [editForm,     setEditForm]     = useState(EMPTY_FORM);
   const [addForm,      setAddForm]      = useState(EMPTY_FORM);
   const [colorFilter,  setColorFilter]  = useState<ColorFilterValue>("all");
+  const [colFilters,   setColFilters]   = useState<Record<string, ColFilter>>({});
+  const [filterOpen,   setFilterOpen]   = useState(false);
+  const filterRef = useRef<HTMLDivElement>(null);
   const [toast,        setToast]        = useState("");
+  const [aiBusy,       setAiBusy]       = useState(false);
+  const [aiError,      setAiError]      = useState("");
+  const [highlightId,  setHighlightId]  = useState<string | null>(null);
 
   function showToast(msg: string) { setToast(msg); setTimeout(() => setToast(""), 3000); }
-  function closeDetail() { setSelected(null); setEditing(false); }
+  function closeDetail() { setSelected(null); setEditing(false); setAiError(""); }
 
-  const visible = accounts.filter(a => colorFilter === "all" || accountColor(a) === colorFilter);
+  async function generateAccountSummary() {
+    if (!selected) return;
+    setAiBusy(true); setAiError("");
+    try {
+      const res = await fetch(apiUrl("/api/v1/ai/entity-summary"), {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ kind: "account", id: selected.id }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error((data as { error?: string })?.error || `Failed (${res.status})`);
+      const summary = String((data as { summary?: string }).summary ?? "").trim();
+      updateAccount(selected.id, { ai_summary: summary });
+      setSelected(prev => (prev ? { ...prev, ai_summary: summary } : prev));
+    } catch (e) {
+      setAiError(e instanceof Error ? e.message : "Failed to generate summary.");
+    } finally {
+      setAiBusy(false);
+    }
+  }
+
+  // Arriving from global search (?focus=<id>): clear the colour filter so the
+  // account shows, then scroll to + highlight its card.
+  useEffect(() => {
+    const focus = new URLSearchParams(window.location.search).get("focus");
+    if (!focus || accounts.length === 0) return;
+    if (!accounts.find(x => x.id === focus)) return;
+    window.history.replaceState({}, "", "/accounts");
+    const t0 = setTimeout(() => { setColorFilter("all"); setHighlightId(focus); }, 0);
+    const t1 = setTimeout(() => document.getElementById(`account-${focus}`)?.scrollIntoView({ behavior: "smooth", block: "center" }), 200);
+    const t2 = setTimeout(() => setHighlightId(null), 2800);
+    return () => { clearTimeout(t0); clearTimeout(t1); clearTimeout(t2); };
+  }, [accounts]);
+
+  // Close the Filter popover on an outside click.
+  useEffect(() => {
+    function onDoc(e: MouseEvent) { if (filterRef.current && !filterRef.current.contains(e.target as Node)) setFilterOpen(false); }
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, []);
+
+  const colGetters: Record<string, (a: Account) => string> = {
+    name:     a => a.name ?? "",
+    industry: a => a.industry ?? "",
+    domain:   a => a.domain ?? "",
+    revenue:  a => a.annual_revenue ?? "",
+  };
+  const visible = accounts.filter(a => (colorFilter === "all" || accountColor(a) === colorFilter) && rowMatches(a, colFilters, colGetters));
+  const setCol = (key: string, v: ColFilter) => setColFilters(f => {
+    const next = { ...f };
+    if (v.q || v.from || v.to) next[key] = v; else delete next[key];
+    return next;
+  });
+  const activeFilterCount = Object.keys(colFilters).length;
   const accountContacts = selected ? contacts.filter(c => c.account_id === selected.id) : [];
 
   function handleAddAccount() {
@@ -120,20 +181,60 @@ export default function AccountsPage() {
   return (
     <div className="space-y-5">
       <div className="flex items-center justify-between gap-3 flex-wrap">
-        <span className="text-[var(--tx5)] text-sm">{visible.length} of {accounts.length} accounts</span>
         <div className="flex items-center gap-3">
+          <span className="text-[var(--tx5)] text-sm">{visible.length} of {accounts.length} accounts</span>
           <ColorFilter value={colorFilter} onChange={setColorFilter} />
-          {canWrite && (
-            <button onClick={() => setShowAddModal(true)} className="flex items-center gap-2 px-3 py-1.5 bg-[var(--a)] text-white text-xs rounded-lg hover:bg-[var(--a-hover)] transition-colors">
-              <Plus size={13} /> Add Account
+
+          {/* Filter & search — cards have no header row, so these live in a popover */}
+          <div className="relative" ref={filterRef}>
+            <button
+              onClick={() => setFilterOpen(o => !o)}
+              className={cn("flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors",
+                activeFilterCount > 0 ? "bg-[var(--a-muted)] border-[var(--a-border)] text-[var(--a-text)]" : "bg-[var(--surface2)] border-[var(--border)] text-[var(--tx4)] hover:border-[var(--a-border)]")}
+            >
+              <Filter size={14} /> Filter
+              {activeFilterCount > 0 && <span className="min-w-[16px] h-4 px-1 text-[9px] font-bold rounded-full flex items-center justify-center bg-[var(--a)] text-white">{activeFilterCount}</span>}
             </button>
-          )}
+            {filterOpen && (
+              <div className="absolute left-0 top-full mt-1.5 z-40 w-64 bg-[var(--surface)] border border-[var(--border)] rounded-lg shadow-2xl p-3 space-y-3">
+                <div className="flex items-center justify-between">
+                  <p className="text-xs font-medium text-[var(--tx2)]">Filter & search</p>
+                  {activeFilterCount > 0 && <button onClick={() => setColFilters({})} className="text-[10px] text-[var(--tx5)] hover:text-rose-400 transition-colors">Clear all</button>}
+                </div>
+                <div>
+                  <label className="block text-[10px] text-[var(--tx5)] mb-1">Name</label>
+                  <input value={colFilters.name?.q ?? ""} onChange={e => setCol("name", { q: e.target.value })} placeholder="Search name…" className={cn(inputCls, "text-xs")} />
+                </div>
+                <div>
+                  <label className="block text-[10px] text-[var(--tx5)] mb-1">Industry</label>
+                  <select value={colFilters.industry?.q ?? ""} onChange={e => setCol("industry", { q: e.target.value })} className={cn(inputCls, "text-xs")}>
+                    <option value="">All</option>
+                    {[...new Set(accounts.map(a => a.industry).filter(Boolean))].sort().map(o => <option key={o} value={o}>{o}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-[10px] text-[var(--tx5)] mb-1">Domain</label>
+                  <input value={colFilters.domain?.q ?? ""} onChange={e => setCol("domain", { q: e.target.value })} placeholder="Search domain…" className={cn(inputCls, "text-xs")} />
+                </div>
+                <div>
+                  <label className="block text-[10px] text-[var(--tx5)] mb-1">Revenue</label>
+                  <input value={colFilters.revenue?.q ?? ""} onChange={e => setCol("revenue", { q: e.target.value })} placeholder="e.g. $10M" className={cn(inputCls, "text-xs")} />
+                </div>
+              </div>
+            )}
+          </div>
         </div>
+
+        {canWrite && (
+          <button onClick={() => setShowAddModal(true)} className="flex items-center gap-2 px-3 py-1.5 bg-[var(--a)] text-white text-xs rounded-lg hover:bg-[var(--a-hover)] transition-colors">
+            <Plus size={13} /> Add Account
+          </button>
+        )}
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
         {visible.map(acc => (
-          <div key={acc.id} onClick={() => { setSelected(acc); setEditing(false); }} className={cn("rounded-xl p-4 cursor-pointer transition-all", cardBg(acc))}>
+          <div id={`account-${acc.id}`} key={acc.id} onClick={() => { setSelected(acc); setEditing(false); setAiError(""); }} className={cn("rounded-xl p-4 cursor-pointer transition-all", cardBg(acc), highlightId === acc.id && "ring-2 ring-[var(--a)]")}>
             <div className="flex items-start justify-between mb-3">
               <div className="w-9 h-9 rounded-lg bg-amber-500/10 flex items-center justify-center"><Building2 size={16} className="text-amber-400" /></div>
               <span className="text-xs text-[var(--tx5)] bg-[var(--surface2)] px-2 py-0.5 rounded-full">{acc.industry || "—"}</span>
@@ -210,6 +311,7 @@ export default function AccountsPage() {
                     </div>
                   ))}
                 </div>
+                <AiSummaryCard summary={selected.ai_summary} busy={aiBusy} error={aiError} canWrite={canWrite} onGenerate={generateAccountSummary} onSaveManual={(text) => { updateAccount(selected.id, { ai_summary: text }); setSelected(prev => (prev ? { ...prev, ai_summary: text } : prev)); setAiError(""); showToast("Summary saved"); }} />
                 <div>
                   <p className="text-[var(--tx5)] text-xs font-medium mb-2">Contacts ({accountContacts.length})</p>
                   {accountContacts.length === 0 ? (
@@ -236,6 +338,7 @@ export default function AccountsPage() {
                   <button onClick={handleDeleteAccount} className="flex items-center justify-center gap-2 py-2.5 bg-rose-500/10 border border-rose-500/30 text-rose-400 text-xs rounded-lg hover:bg-rose-500/20 transition-colors font-medium"><Trash2 size={13} /> Delete</button>
                 </div>
                 )}
+                <DumpPanel entityType="account" entityId={selected.id} />
               </>
             )}
           </div>
