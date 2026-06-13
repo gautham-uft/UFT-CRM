@@ -13,6 +13,7 @@ import NoAccess from "@/components/NoAccess";
 import NotesSection from "@/components/NotesSection";
 import AiSummaryCard from "@/components/AiSummaryCard";
 import DumpPanel from "@/components/DumpPanel";
+import ActivityPanel from "@/components/ActivityPanel";
 import { apiUrl } from "@/lib/api-base";
 import { MapPin, Link, Cake, FileText } from "lucide-react";
 
@@ -347,6 +348,7 @@ export default function ContactsPage() {
                   <button onClick={handleDeleteContact} className="flex items-center justify-center gap-2 py-2.5 bg-rose-500/10 border border-rose-500/30 text-rose-400 text-xs rounded-lg hover:bg-rose-500/20 transition-colors font-medium"><Trash2 size={13} /> Delete</button>
                 </div>
                 )}
+                <ActivityPanel kind="contact" collection="contacts" entityId={selected.id} canWrite={canWrite} />
                 <DumpPanel entityType="contact" entityId={selected.id} />
               </>
             )}

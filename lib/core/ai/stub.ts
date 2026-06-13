@@ -14,6 +14,9 @@ const stubSummarizer: Summarizer = {
   async summarizeEntity(): Promise<string> {
     throw new Error("AI summaries are not configured. Add GEMINI_API_KEY to .env.local.");
   },
+  async summarizeActivity(): Promise<string> {
+    throw new Error("AI summaries are not configured. Add GEMINI_API_KEY to .env.local.");
+  },
 };
 
 export function getStubAi(): AiModules {

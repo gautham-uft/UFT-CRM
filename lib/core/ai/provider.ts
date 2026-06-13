@@ -7,7 +7,7 @@
 // ─────────────────────────────────────────────────────────────────────────
 
 import type { AiConfig, AiProvider } from "@/lib/core/settings";
-import type { Summarizer, LeadSummaryInput, SummaryKind } from "./index";
+import type { Summarizer, LeadSummaryInput, SummaryKind, ActivityInput } from "./index";
 import { dumpToPromptLines } from "@/lib/core/dump";
 
 type Resolved = { provider: AiProvider; model: string; apiKey: string; baseUrl: string };
@@ -149,10 +149,47 @@ function entityPrompt(kind: SummaryKind, facts: Record<string, string>, extra?: 
   );
 }
 
+// Digest of every interaction logged for an account / contact / lead (for an
+// account, this aggregates the contacts, deals, and leads under it too). Produces
+// a short engagement narrative + a suggested next step.
+function activityPrompt(input: ActivityInput): string {
+  const scope = input.kind === "account"
+    ? "this account and the contacts, deals, and leads under it"
+    : input.kind === "contact"
+    ? "this contact and the deals they're on"
+    : "this lead";
+  const subjectLabel = input.kind === "account" ? "Account" : input.kind === "contact" ? "Contact" : "Lead";
+  const contextLabel = input.kind === "account" ? "Industry" : "Company";
+
+  const header = [
+    `${subjectLabel}: ${input.subject}`,
+    input.context && `${contextLabel}: ${input.context}`,
+    `Total interactions: ${input.touches.length}`,
+  ].filter(Boolean).join("\n");
+
+  const log = input.touches.map(t => {
+    const when = t.date ? t.date.slice(0, 10) : "";
+    const kind = (t.type || "note").replace("call_log", "call");
+    const parts = [when, kind, t.on && `on ${t.on}`, t.by && `by ${t.by}`].filter(Boolean).join(" · ");
+    return `- ${parts}: ${t.description ?? ""}`.trim();
+  }).join("\n");
+
+  return (
+    "You are a sales assistant for Unitforce Technologies (UFT), which provides manpower/recruitment, " +
+    `AI, engineering, and software services to businesses. Below is the recent activity log for ${scope}, ` +
+    "aggregating every call, email, note, and meeting logged. Write a concise digest (3-5 sentences, " +
+    "plain prose, no bullet points, no preamble or sign-off) for an account manager. Cover: the overall " +
+    "engagement level and momentum, the main themes or topics discussed, who is most active, and one " +
+    "concrete suggested next step. Do NOT list the interactions one by one and do NOT invent details not present.\n\n" +
+    `${header}\n\nActivity log (most recent first):\n${log}`
+  );
+}
+
 export function buildSummarizer(r: Resolved): Summarizer {
   return {
     summarizeLead: (lead) => generate(leadPrompt(lead), r),
     summarizeEntity: (kind, facts, extra) => generate(entityPrompt(kind, facts, extra), r),
+    summarizeActivity: (input) => generate(activityPrompt(input), r),
     // Documents store only a filename today — keep the placeholder.
     summarizeDocument: async () => "This content will be given by AI.",
   };
