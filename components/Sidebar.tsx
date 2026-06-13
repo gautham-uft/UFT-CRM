@@ -5,16 +5,16 @@ import { usePathname } from "next/navigation";
 import {
   LayoutDashboard, Users, Building2, UserCircle, TrendingUp,
   Activity, CreditCard, ChevronRight, Zap,
-  CalendarClock, Search, ShieldCheck,
+  CalendarClock, Search, ShieldCheck, Database, Cog,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAppData } from "@/contexts/AppDataContext";
 import { useCurrentUser } from "@/contexts/CurrentUserContext";
 import { usePermissions } from "@/contexts/PermissionsContext";
-import { moduleForPath } from "@/lib/permissions";
+import { moduleForPath, SUPERUSER_ROLE } from "@/lib/permissions";
 
 // Settings now lives inside the Dev Tools panel (top bar), not the sidebar.
-const navItems = [
+const navItems: { label: string; href: string; icon: typeof LayoutDashboard; directorOnly?: boolean }[] = [
   { label: "Dashboard",     href: "/",              icon: LayoutDashboard },
   { label: "Leads",         href: "/leads",         icon: Zap },
   { label: "Quick Tab",     href: "/quick-tab",     icon: Search },
@@ -25,6 +25,8 @@ const navItems = [
   { label: "Activities",    href: "/activities",    icon: Activity },
   { label: "Follow-ups",    href: "/follow-ups",    icon: CalendarClock },
   { label: "Business Card", href: "/business-card", icon: CreditCard },
+  { label: "Database",      href: "/database",      icon: Database },
+  { label: "Admin Panel",   href: "/admin",         icon: Cog, directorOnly: true },
 ];
 
 function getTodayStr() {
@@ -41,9 +43,10 @@ export default function Sidebar() {
   const today = getTodayStr();
   const pendingCount = followUps.filter(f => !f.done && f.follow_up_date && f.follow_up_date <= today).length;
 
-  // Only show modules the current role can read.
-  const visibleNav = navItems.filter(({ href }) => {
-    const mod = moduleForPath(href);
+  // Only show modules the current role can read; Admin Panel is Director-only.
+  const visibleNav = navItems.filter((item) => {
+    if (item.directorOnly) return currentUser.role === SUPERUSER_ROLE;
+    const mod = moduleForPath(item.href);
     return mod ? canRead(mod) : true;
   });
 

@@ -1,6 +1,7 @@
-// Client helper for the Quick Tab search (/api/quick-search).
+// Client helper for the Quick Tab search (/api/v1/quick-search).
 import type { EnrichedPOC, EnrichmentCompany } from "@/lib/enrichment/types";
 import type { JobPosting } from "@/lib/jobs/types";
+import { apiUrl } from "@/lib/api-base";
 
 export type QuickSearchInput = { company_name: string; domain?: string; location?: string };
 
@@ -19,7 +20,7 @@ export type QuickSearchResult = {
 };
 
 export async function quickSearch(input: QuickSearchInput): Promise<QuickSearchResult> {
-  const res = await fetch("/api/quick-search", {
+  const res = await fetch(apiUrl("/api/v1/quick-search"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input),

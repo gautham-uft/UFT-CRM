@@ -3,14 +3,18 @@
 import { useState } from "react";
 import {
   ShieldCheck, XCircle, Clock, Building2, Briefcase, Mail, Link as LinkIcon,
-  Loader2, CheckCircle, Inbox, User,
+  Loader2, CheckCircle, Inbox, User, List,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { usePermissions } from "@/contexts/PermissionsContext";
 import { useCurrentUser } from "@/contexts/CurrentUserContext";
+import { useNow } from "@/contexts/NowContext";
+import { useAppData } from "@/contexts/AppDataContext";
 import { useCollection } from "@/hooks/useCollection";
 import NoAccess from "@/components/NoAccess";
-import { respondScoutRequest, type ScoutRequest } from "@/lib/scout-client";
+import { type ScoutRequest } from "@/lib/scout-client";
+
+type LeadRow = { id: string; first_name?: string; last_name?: string; profile?: Record<string, unknown> };
 
 const inputCls = "w-full px-3 py-2 bg-[var(--surface2)] border border-[var(--border)] rounded-lg text-[var(--tx2)] text-xs placeholder:text-[var(--tx6)] focus:outline-none focus:border-[var(--a-border)] transition-colors";
 
@@ -23,10 +27,14 @@ const statusCfg: Record<string, { label: string; cls: string; Icon: typeof Shiel
 export default function NaukriVerifyPage() {
   const { ready, canRead, canWrite } = usePermissions();
   const { currentUser } = useCurrentUser();
+  const { today, now } = useNow();
+  const { addActivity, addFollowUp } = useAppData();
   const canVerify = canWrite("Naukri Verification");
   const userName = `${currentUser.first_name} ${currentUser.last_name}`.trim();
+  const nowISO = () => (now ? new Date(now).toISOString() : new Date().toISOString());
 
-  const { items: requests, loading, refresh } = useCollection<ScoutRequest>("scoutRequests");
+  const { items: requests, loading, update: updateRequest } = useCollection<ScoutRequest>("scoutRequests");
+  const { items: leads, update: updateLeadRow } = useCollection<LeadRow>("leads");
   const [filter, setFilter] = useState<"pending" | "responded" | "all">("pending");
   const [active, setActive] = useState<{ id: string; status: "found" | "not_found" } | null>(null);
   const [url, setUrl]       = useState("");
@@ -51,8 +59,40 @@ export default function NaukriVerifyPage() {
     if (!active || saving) return;
     setSaving(true);
     try {
-      await respondScoutRequest({ request_id: active.id, status: active.status, naukri_url: url.trim() || undefined, note: note.trim() || undefined, responded_by: userName });
-      await refresh();
+      const reqRow = requests.find(r => r.id === active.id);
+      // Update the request through the data layer (offline-first store + cloud mirror).
+      await updateRequest(active.id, {
+        status:       active.status,
+        naukri_url:   url.trim() || undefined,
+        note:         note.trim() || undefined,
+        responded_at: nowISO(),
+        responded_by: userName,
+      });
+      if (reqRow) {
+        // Mirror the verdict onto the lead's profile (the Naukri section in the Lead tab).
+        const lead = leads.find(l => l.id === reqRow.lead_id);
+        if (lead) {
+          const prof = (lead.profile && typeof lead.profile === "object" ? lead.profile : {}) as Record<string, unknown>;
+          await updateLeadRow(lead.id, { profile: { ...prof, naukri_status: active.status, naukri_url: url.trim() || prof.naukri_url, last_updated: today } });
+        }
+        addActivity({
+          user: userName, entity_type: "lead", entity_name: reqRow.lead_name || "Lead",
+          activity_type: "note",
+          description: `Naukri verification: ${active.status === "found" ? "FOUND" : "NOT FOUND"}${reqRow.poc_name ? ` — ${reqRow.poc_name}` : ""}${reqRow.company_name ? ` @ ${reqRow.company_name}` : ""}${url.trim() ? ` (${url.trim()})` : ""}`,
+          created_at: nowISO(),
+        });
+        // Notify the requester of the verdict (shows in their notifications + follow-ups).
+        if (reqRow.requested_by) {
+          addFollowUp({
+            source: "task", source_id: `naukri-result-${active.id}`,
+            entity_name: `${reqRow.lead_name}${reqRow.company_name ? ` · ${reqRow.company_name}` : ""}`,
+            category: "naukri",
+            note: active.status === "found" ? "✓ Naukri verified by scout" : "Not found on Naukri",
+            follow_up_date: today, logged_at: nowISO(), done: false,
+            assignee: reqRow.requested_by, assigned_by: userName,
+          });
+        }
+      }
       setActive(null); setUrl(""); setNote("");
       showToast(active.status === "found" ? "Marked as found on Naukri" : "Marked as not found");
     } catch (err) {
@@ -73,10 +113,15 @@ export default function NaukriVerifyPage() {
 
       {/* Filter tabs */}
       <div className="flex items-stretch gap-1 bg-[var(--surface)] border border-[var(--border)] rounded-lg p-1 w-fit">
-        {(["pending", "responded", "all"] as const).map(f => (
-          <button key={f} onClick={() => setFilter(f)} className={cn("px-3 py-1.5 rounded-md text-xs font-medium transition-colors capitalize flex items-center gap-1.5", filter === f ? "bg-[var(--a)] text-white" : "text-[var(--tx4)] hover:text-[var(--tx2)]")}>
-            {f}
-            {f === "pending" && pendingCount > 0 && <span className={cn("min-w-[16px] h-4 px-1 text-[9px] font-bold rounded-full flex items-center justify-center", filter === f ? "bg-white/25 text-white" : "bg-amber-500 text-white")}>{pendingCount}</span>}
+        {([
+          { key: "pending",   label: "Pending",   Icon: Clock },
+          { key: "responded", label: "Responded", Icon: CheckCircle },
+          { key: "all",       label: "All",       Icon: List },
+        ] as const).map(f => (
+          <button key={f.key} onClick={() => setFilter(f.key)} aria-label={f.label} className={cn("relative flex flex-col items-center gap-0.5 px-2 pt-1.5 pb-1 rounded-md min-w-[56px] transition-colors", filter === f.key ? "bg-[var(--a)] text-white" : "text-[var(--tx4)] hover:text-[var(--tx2)] hover:bg-[var(--surface2)]")}>
+            <f.Icon size={16} />
+            <span className="text-[10px] font-medium leading-none">{f.label}</span>
+            {f.key === "pending" && pendingCount > 0 && <span className={cn("absolute top-0.5 right-0.5 min-w-[15px] h-[15px] px-1 text-[9px] font-bold rounded-full flex items-center justify-center leading-none", filter === f.key ? "bg-white/30 text-white" : "bg-amber-500 text-white")}>{pendingCount}</span>}
           </button>
         ))}
       </div>

@@ -6,7 +6,8 @@ import { serpapi } from "./providers/serpapi";
 
 const PROVIDERS: JobsProvider[] = [serpapi];
 
-export function configuredJobsProviders(): string[] {
+export function configuredJobsProviders(enabled?: boolean): string[] {
+  if (enabled === false) return [];
   return PROVIDERS.filter(p => p.isConfigured()).map(p => p.name);
 }
 
@@ -22,8 +23,8 @@ function dedupe(jobs: JobPosting[]): JobPosting[] {
   return out;
 }
 
-export async function fetchJobs(input: JobsInput): Promise<JobsResult> {
-  const active = PROVIDERS.filter(p => p.isConfigured());
+export async function fetchJobs(input: JobsInput, opts?: { enabled?: boolean }): Promise<JobsResult> {
+  const active = opts?.enabled === false ? [] : PROVIDERS.filter(p => p.isConfigured());
   const available = active.map(p => p.name);
 
   const settled = await Promise.allSettled(active.map(p => p.fetchJobs(input)));

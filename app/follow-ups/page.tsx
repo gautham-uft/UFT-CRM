@@ -12,6 +12,7 @@ import { cn } from "@/lib/utils";
 import {
   Phone, Clock, XCircle, CheckCircle, Calendar, Check, User,
   Zap, TrendingUp, CalendarClock, Pencil, Trash2, X, Plus, UserCheck,
+  AlertCircle, FileText, PauseCircle, ShieldCheck,
 } from "lucide-react";
 
 // ── Category config ───────────────────────────────────────────────
@@ -19,13 +20,18 @@ import {
 type CatCfg = { label: string; color: string; bg: string; Icon: typeof Phone };
 
 const CAT: Record<string, CatCfg> = {
-  callback:       { label: "Callback",       color: "text-sky-400",     bg: "bg-sky-500/15 border-sky-500/30",     Icon: Phone       },
-  postponed:      { label: "Postponed",      color: "text-amber-400",   bg: "bg-amber-500/15 border-amber-500/30", Icon: Clock       },
-  not_interested: { label: "Not Interested", color: "text-rose-400",    bg: "bg-rose-500/15 border-rose-500/30",   Icon: XCircle     },
-  progressing:    { label: "Moving Forward", color: "text-emerald-400", bg: "bg-emerald-500/15 border-emerald-500/30", Icon: CheckCircle },
-  call:           { label: "Call",           color: "text-sky-400",     bg: "bg-sky-500/15 border-sky-500/30",     Icon: Phone       },
-  task:           { label: "Task",           color: "text-violet-400",  bg: "bg-violet-500/15 border-violet-500/30", Icon: CheckCircle },
-  deadline:       { label: "Deadline",       color: "text-red-400",     bg: "bg-red-500/15 border-red-500/30",     Icon: Clock       },
+  callback:          { label: "Callback",          color: "text-sky-400",     bg: "bg-sky-500/15 border-sky-500/30",     Icon: Phone       },
+  postponed:         { label: "Postponed",         color: "text-amber-400",   bg: "bg-amber-500/15 border-amber-500/30", Icon: Clock       },
+  not_responding:    { label: "Not Responding",    color: "text-amber-400",   bg: "bg-amber-500/15 border-amber-500/30", Icon: AlertCircle },
+  requested_details: { label: "Requested Details", color: "text-sky-400",     bg: "bg-sky-500/15 border-sky-500/30",     Icon: FileText    },
+  meeting:           { label: "Meeting",           color: "text-sky-400",     bg: "bg-sky-500/15 border-sky-500/30",     Icon: Calendar    },
+  suspend:           { label: "Suspended",         color: "text-rose-400",    bg: "bg-rose-500/15 border-rose-500/30",   Icon: PauseCircle },
+  naukri:            { label: "Naukri Verify",     color: "text-emerald-400", bg: "bg-emerald-500/15 border-emerald-500/30", Icon: ShieldCheck },
+  not_interested:    { label: "Not Interested",    color: "text-rose-400",    bg: "bg-rose-500/15 border-rose-500/30",   Icon: XCircle     },
+  progressing:       { label: "Moving Forward",    color: "text-emerald-400", bg: "bg-emerald-500/15 border-emerald-500/30", Icon: CheckCircle },
+  call:              { label: "Call",              color: "text-sky-400",     bg: "bg-sky-500/15 border-sky-500/30",     Icon: Phone       },
+  task:              { label: "Task",              color: "text-violet-400",  bg: "bg-violet-500/15 border-violet-500/30", Icon: CheckCircle },
+  deadline:          { label: "Deadline",          color: "text-red-400",     bg: "bg-red-500/15 border-red-500/30",     Icon: Clock       },
 };
 
 type SrcCfg = { label: string; color: string; Icon: typeof Phone };
@@ -120,7 +126,7 @@ function FollowUpCard({ item, onToggle, onEdit, onDelete, canWrite }: { item: Fo
 
 // ── Page ──────────────────────────────────────────────────────────
 
-const CATEGORY_OPTIONS = ["callback", "postponed", "not_interested", "progressing", "call", "task", "deadline"];
+const CATEGORY_OPTIONS = ["callback", "postponed", "not_responding", "requested_details", "meeting", "suspend", "not_interested", "progressing", "call", "task", "deadline"];
 
 type AppUser = { id: string; first_name: string; last_name: string; role: string };
 

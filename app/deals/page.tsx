@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { mockDeals, mockPipelineStages } from "@/lib/mock-data";
-import { Plus, DollarSign, User, Building2, X, CheckCircle2, CheckCircle, Trash2 } from "lucide-react";
+import { Plus, DollarSign, User, Building2, X, CheckCircle2, CheckCircle, Trash2, Search, Filter } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAppData } from "@/contexts/AppDataContext";
 import { useCurrentUser } from "@/contexts/CurrentUserContext";
@@ -50,11 +50,48 @@ export default function DealsPage() {
   const [logNote,        setLogNote]        = useState("");
   const [logType,        setLogType]        = useState<"call_log" | "email" | "note" | "meeting">("call_log");
   const [toast,          setToast]          = useState("");
+  const [search,         setSearch]         = useState("");
+  const [fAccount,       setFAccount]       = useState("");
+  const [fContact,       setFContact]       = useState("");
+  const [fOwner,         setFOwner]         = useState("");
+  const [highlightId,    setHighlightId]    = useState<string | null>(null);
 
   function showToast(msg: string) { setToast(msg); setTimeout(() => setToast(""), 3000); }
 
+  // Arriving from global search (?focus=<id>): clear filters so the deal shows,
+  // then scroll to + highlight its card.
+  useEffect(() => {
+    const focus = new URLSearchParams(window.location.search).get("focus");
+    if (!focus || deals.length === 0) return;
+    if (!deals.find(x => x.id === focus)) return;
+    window.history.replaceState({}, "", "/deals");
+    const t0 = setTimeout(() => { setSearch(""); setFAccount(""); setFContact(""); setFOwner(""); setHighlightId(focus); }, 0);
+    const t1 = setTimeout(() => document.getElementById(`deal-${focus}`)?.scrollIntoView({ behavior: "smooth", block: "center" }), 200);
+    const t2 = setTimeout(() => setHighlightId(null), 2800);
+    return () => { clearTimeout(t0); clearTimeout(t1); clearTimeout(t2); };
+  }, [deals]);
+
+  // Filter options derived from the deals that exist.
+  const uniq = (vals: (string | undefined)[]) => [...new Set(vals.filter((v): v is string => !!v && v.trim() !== ""))].sort();
+  const dealAccounts = uniq(deals.map(d => d.account_name));
+  const dealContacts = uniq(deals.map(d => d.contact));
+  const dealOwners   = uniq(deals.map(d => d.owner));
+  const filtersActive = !!(search.trim() || fAccount || fContact || fOwner);
+
+  const filteredDeals = deals.filter(d => {
+    if (fAccount && d.account_name !== fAccount) return false;
+    if (fContact && d.contact !== fContact) return false;
+    if (fOwner && d.owner !== fOwner) return false;
+    if (search.trim()) {
+      const q = search.trim().toLowerCase();
+      if (![d.name, d.account_name, d.contact, d.owner].some(v => (v ?? "").toLowerCase().includes(q))) return false;
+    }
+    return true;
+  });
+  function clearFilters() { setSearch(""); setFAccount(""); setFContact(""); setFOwner(""); }
+
   const activeStages = mockPipelineStages.filter(s => s.name !== "Closed Lost");
-  const dealsByStage = (stageId: string) => deals.filter(d => d.stage_id === stageId);
+  const dealsByStage = (stageId: string) => filteredDeals.filter(d => d.stage_id === stageId);
 
   const handleDrop = (stageId: string) => {
     if (!dragging) return;
@@ -68,7 +105,7 @@ export default function DealsPage() {
     updateDeal(dragging, { stage_id: stageId });
   };
 
-  const totalPipeline = deals.filter(d => !["5","6"].includes(d.stage_id)).reduce((s, d) => s + d.total_amount, 0);
+  const totalPipeline = filteredDeals.filter(d => !["5","6"].includes(d.stage_id)).reduce((s, d) => s + d.total_amount, 0);
 
   function handleAddDeal() {
     if (!addForm.name.trim()) return;
@@ -124,7 +161,7 @@ export default function DealsPage() {
     <div className="flex flex-col gap-4 h-[calc(100vh-112px)]">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <span className="text-[var(--tx5)] text-sm">{deals.length} deals</span>
+          <span className="text-[var(--tx5)] text-sm">{filtersActive ? `${filteredDeals.length} of ${deals.length}` : deals.length} deals</span>
           <span className="text-[var(--a-text)] text-sm font-medium">· ${totalPipeline.toLocaleString()} in pipeline</span>
         </div>
         {canWrite && (
@@ -134,14 +171,38 @@ export default function DealsPage() {
         )}
       </div>
 
+      {/* Filters */}
+      <div className="flex items-center gap-2 flex-wrap">
+        <span className="flex items-center gap-1.5 text-[var(--tx5)] text-xs"><Filter size={13} /> Filter</span>
+        <div className="relative">
+          <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--tx5)]" />
+          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search deals…" className="pl-8 pr-3 py-1.5 w-48 bg-[var(--surface2)] border border-[var(--border)] rounded-lg text-[var(--tx3)] text-xs placeholder:text-[var(--tx6)] focus:outline-none focus:border-[var(--a-border)] transition-colors" />
+        </div>
+        <select value={fAccount} onChange={e => setFAccount(e.target.value)} className="px-2.5 py-1.5 bg-[var(--surface2)] border border-[var(--border)] rounded-lg text-[var(--tx3)] text-xs focus:outline-none focus:border-[var(--a-border)] max-w-[160px]">
+          <option value="">All accounts</option>
+          {dealAccounts.map(a => <option key={a} value={a}>{a}</option>)}
+        </select>
+        <select value={fContact} onChange={e => setFContact(e.target.value)} className="px-2.5 py-1.5 bg-[var(--surface2)] border border-[var(--border)] rounded-lg text-[var(--tx3)] text-xs focus:outline-none focus:border-[var(--a-border)] max-w-[160px]">
+          <option value="">All contacts</option>
+          {dealContacts.map(c => <option key={c} value={c}>{c}</option>)}
+        </select>
+        <select value={fOwner} onChange={e => setFOwner(e.target.value)} className="px-2.5 py-1.5 bg-[var(--surface2)] border border-[var(--border)] rounded-lg text-[var(--tx3)] text-xs focus:outline-none focus:border-[var(--a-border)] max-w-[160px]">
+          <option value="">All owners</option>
+          {dealOwners.map(o => <option key={o} value={o}>{o}</option>)}
+        </select>
+        {filtersActive && (
+          <button onClick={clearFilters} className="flex items-center gap-1 px-2.5 py-1.5 text-[var(--tx5)] hover:text-rose-400 text-xs transition-colors"><X size={12} /> Clear</button>
+        )}
+      </div>
+
       {/* Kanban — columns flex to fit the viewport so all stages stay visible
           without horizontal scrolling. */}
-      <div className="flex gap-2 pb-2 flex-1 min-w-0">
+      <div className="flex gap-2 pb-2 flex-1 min-w-0 min-h-0">
         {activeStages.map(stage => {
           const stageDeals = dealsByStage(stage.id);
           const stageValue = stageDeals.reduce((s, d) => s + d.total_amount, 0);
           return (
-            <div key={stage.id} className="flex-1 basis-0 min-w-0 flex flex-col" onDragOver={e => e.preventDefault()} onDrop={() => handleDrop(stage.id)}>
+            <div key={stage.id} className="flex-1 basis-0 min-w-0 flex flex-col min-h-0" onDragOver={e => e.preventDefault()} onDrop={() => handleDrop(stage.id)}>
               <div className={cn("bg-[var(--surface)] border border-[var(--border)] rounded-xl p-3 mb-2 border-t-2", stageColors[stage.name] ?? "border-t-slate-500")}>
                 <div className="flex items-center justify-between">
                   <span className="text-[var(--tx2)] text-xs font-semibold">{stage.name}</span>
@@ -151,7 +212,7 @@ export default function DealsPage() {
               </div>
               <div className="flex-1 space-y-2 overflow-y-auto">
                 {stageDeals.map(deal => (
-                  <div key={deal.id} draggable={canWrite} onDragStart={() => canWrite && setDragging(deal.id)} onClick={() => setSelectedDeal(deal)} className={cn("bg-[var(--surface)] border border-[var(--border)] rounded-xl p-3 hover:border-[var(--a-border)] transition-all active:opacity-70", canWrite ? "cursor-grab" : "cursor-pointer", dragging === deal.id && "opacity-40")}>
+                  <div id={`deal-${deal.id}`} key={deal.id} draggable={canWrite} onDragStart={() => canWrite && setDragging(deal.id)} onClick={() => setSelectedDeal(deal)} className={cn("bg-[var(--surface)] border border-[var(--border)] rounded-xl p-3 hover:border-[var(--a-border)] transition-all active:opacity-70", canWrite ? "cursor-grab" : "cursor-pointer", dragging === deal.id && "opacity-40", highlightId === deal.id && "ring-2 ring-[var(--a)]")}>
                     <p className="text-[var(--tx2)] text-xs font-medium mb-2 line-clamp-2">{deal.name}</p>
                     <div className="space-y-1.5">
                       <div className="flex items-center gap-1.5"><DollarSign size={11} className="text-emerald-400 shrink-0" /><span className="text-emerald-400 text-xs font-medium truncate">${deal.total_amount.toLocaleString()}</span></div>

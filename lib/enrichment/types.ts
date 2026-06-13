@@ -12,6 +12,7 @@ export type EnrichedPOC = {
   name:        string;
   title?:      string;
   email?:      string;
+  phone?:      string;
   linkedin?:   string;
   confidence?: number; // 0-100 when the provider reports it
   source:      string; // which provider surfaced this person

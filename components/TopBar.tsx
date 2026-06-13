@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect } from "react";
 import { usePathname } from "next/navigation";
-import { Bell, Search, Moon, Sun, Telescope, CalendarDays, Plus, CalendarPlus, ClipboardList, StickyNote } from "lucide-react";
+import { Bell, Moon, Sun, Telescope, CalendarDays, Plus, CalendarPlus, ClipboardList, StickyNote, UserCircle } from "lucide-react";
 import { useTheme, type Theme } from "@/contexts/ThemeContext";
 import { useAppData } from "@/contexts/AppDataContext";
 import { useNow } from "@/contexts/NowContext";
@@ -13,6 +13,8 @@ import { cn } from "@/lib/utils";
 import CalendarPanel from "@/components/CalendarPanel";
 import NotificationsPanel from "@/components/NotificationsPanel";
 import DevTools from "@/components/DevTools";
+import GlobalSearch from "@/components/GlobalSearch";
+import ProfileModal from "@/components/ProfileModal";
 
 const titles: Record<string, string> = {
   "/":              "Dashboard",
@@ -48,7 +50,10 @@ export default function TopBar() {
   const [calendarOpen, setCalendarOpen]   = useState(false);
   const [notifOpen,    setNotifOpen]      = useState(false);
   const [quickOpen,    setQuickOpen]      = useState(false);
+  const [profileOpen,  setProfileOpen]    = useState(false);
   const quickRef = useRef<HTMLDivElement>(null);
+
+  const initials = (currentUser.first_name?.[0] ?? "") + (currentUser.last_name?.[0] ?? "");
 
   useEffect(() => {
     function handler(e: MouseEvent) {
@@ -59,9 +64,11 @@ export default function TopBar() {
   }, []);
 
   const quickItems = [
+    // Everyone (incl. Executives) can schedule meetings.
+    { label: "Schedule Meeting", Icon: CalendarPlus, run: openScheduleMeeting },
+    // Restricted roles (Executives) receive tasks but can't assign them to others.
     ...(restricted ? [] : [
-      { label: "Schedule Meeting", Icon: CalendarPlus,  run: openScheduleMeeting },
-      { label: "Assign Task",      Icon: ClipboardList, run: openAssignTask },
+      { label: "Assign Task", Icon: ClipboardList, run: openAssignTask },
     ]),
     { label: "Add Note", Icon: StickyNote, run: () => openAddNote() },
   ];
@@ -130,15 +137,8 @@ export default function TopBar() {
           ))}
         </div>
 
-        {/* Search */}
-        <div className="relative">
-          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--tx5)]" />
-          <input
-            type="text"
-            placeholder="Search..."
-            className="bg-[var(--surface2)] border border-[var(--border)] text-[var(--tx3)] placeholder-[var(--tx6)] text-sm rounded-lg pl-8 pr-4 py-1.5 w-48 focus:outline-none focus:border-[var(--a-border)] focus:ring-1 focus:ring-[var(--a-ring)] transition-colors"
-          />
-        </div>
+        {/* Global search */}
+        <GlobalSearch />
 
         {/* Calendar */}
         <div className="relative">
@@ -176,7 +176,18 @@ export default function TopBar() {
           </button>
           {notifOpen && <NotificationsPanel onClose={() => setNotifOpen(false)} />}
         </div>
+
+        {/* Profile */}
+        <button
+          onClick={() => setProfileOpen(true)}
+          title={`${currentUser.first_name} ${currentUser.last_name}`.trim() || "Profile"}
+          className="w-8 h-8 rounded-full bg-[var(--a-muted)] border border-[var(--border)] hover:border-[var(--a-border)] flex items-center justify-center text-[var(--a-text)] text-xs font-semibold transition-colors shrink-0"
+        >
+          {initials || <UserCircle size={16} />}
+        </button>
       </div>
+
+      {profileOpen && <ProfileModal onClose={() => setProfileOpen(false)} />}
     </header>
   );
 }

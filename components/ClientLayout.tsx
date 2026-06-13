@@ -6,6 +6,7 @@ import { NowProvider } from "@/contexts/NowContext";
 import { CurrentUserProvider } from "@/contexts/CurrentUserContext";
 import { PermissionsProvider } from "@/contexts/PermissionsContext";
 import { QuickActionsProvider } from "@/components/QuickActions";
+import LoginFollowUpModal from "@/components/LoginFollowUpModal";
 
 export default function ClientLayout({ children }: { children: React.ReactNode }) {
   return (
@@ -15,6 +16,7 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
           <PermissionsProvider>
             <AppDataProvider>
               <QuickActionsProvider>
+                <LoginFollowUpModal />
                 {children}
               </QuickActionsProvider>
             </AppDataProvider>

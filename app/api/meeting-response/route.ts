@@ -1,20 +1,11 @@
-import { getAll, createOne, updateOne } from "@/lib/db";
-import { googleCalendarUrl, outlookCalendarUrl, icsContent, type CalEvent } from "@/lib/calendar-links";
+import { getRepository } from "@/lib/data";
+import { respondToInvite, type RespondAction } from "@/lib/core/meetings";
+import { googleCalendarUrl, outlookCalendarUrl, icsContent } from "@/lib/core/calendar";
 
 // Public landing endpoint for the Accept / Decline buttons in meeting-invite
-// emails. Opened in the lead's browser (GET), so it returns styled HTML — not
-// JSON. On Accept it records the response, creates a confirmed meeting in the
-// CRM (linked to the lead), and offers add-to-calendar links for Google /
-// Outlook / .ics. No login required for the lead.
+// emails. Opened in the lead's browser (GET) → returns styled HTML. The data
+// side lives in core/meetings; this route owns rendering + .ics output.
 export const dynamic = "force-dynamic";
-
-type Invite = {
-  id: string; token: string; status: string;
-  lead_id?: string; lead_name?: string; to?: string;
-  title: string; date: string; time?: string;
-  mode?: "online" | "offline"; location?: string; link?: string;
-  responded_at?: string;
-};
 
 function baseUrl(req: Request): string {
   if (process.env.APP_BASE_URL) return process.env.APP_BASE_URL.replace(/\/$/, "");
@@ -22,20 +13,6 @@ function baseUrl(req: Request): string {
   const proto = h.get("x-forwarded-proto") || "https";
   const host = h.get("host") || "";
   return host ? `${proto}://${host}` : "";
-}
-
-function calEventFrom(inv: Invite): CalEvent {
-  const isOnline = inv.mode !== "offline";
-  const where = isOnline ? (inv.link || "Online") : (inv.location || "In person");
-  const details = isOnline && inv.link ? `Join: ${inv.link}` : "Meeting arranged via UF Technology.";
-  return {
-    title: inv.title || "Meeting with UF Technology",
-    date: inv.date,
-    time: inv.time,
-    durationMin: 30,
-    details,
-    location: where,
-  };
 }
 
 function html(body: string, status = 200): Response {
@@ -63,23 +40,19 @@ export async function GET(req: Request) {
     return html(`<h2 style="margin:0 0 8px;color:#dc2626;font-size:18px;">Invalid link</h2><p style="color:#64748b;font-size:14px;">This response link is missing or malformed.</p>`, 400);
   }
 
-  let invites: Invite[];
+  let outcome;
   try {
-    invites = (await getAll("meetingInvites")) as unknown as Invite[];
+    outcome = await respondToInvite(getRepository(), token, action as RespondAction);
   } catch {
     return html(`<h2 style="margin:0 0 8px;color:#dc2626;font-size:18px;">Something went wrong</h2><p style="color:#64748b;font-size:14px;">Please try again later.</p>`, 500);
   }
 
-  const invite = invites.find((i) => i.token === token);
-  if (!invite) {
+  if (outcome.kind === "not_found") {
     return html(`<h2 style="margin:0 0 8px;color:#dc2626;font-size:18px;">Link expired</h2><p style="color:#64748b;font-size:14px;">We couldn't find this invitation. It may have been withdrawn.</p>`, 404);
   }
 
-  const cal = calEventFrom(invite);
-
-  // ── Download .ics ──
-  if (action === "ics") {
-    return new Response(icsContent(cal, `${invite.token}@uft-crm`), {
+  if (outcome.kind === "ics") {
+    return new Response(icsContent(outcome.cal, `${outcome.invite.token}@uft-crm`), {
       headers: {
         "content-type": "text/calendar; charset=utf-8",
         "content-disposition": `attachment; filename="uft-meeting.ics"`,
@@ -87,40 +60,15 @@ export async function GET(req: Request) {
     });
   }
 
-  const base = baseUrl(req);
-  const whenLine = `${invite.date}${invite.time ? ` at ${invite.time}` : ""}`;
-
-  // ── Decline ──
-  if (action === "decline") {
-    if (invite.status === "pending") {
-      await updateOne("meetingInvites", invite.id, { status: "declined", responded_at: new Date().toISOString() });
-      await createOne("activities", {
-        user: "System", entity_type: "lead", entity_name: invite.lead_name || invite.to || "Lead",
-        activity_type: "note", description: `${invite.lead_name || "Lead"} DECLINED the meeting (${whenLine}).`,
-        created_at: new Date().toISOString(),
-      }).catch(() => {});
-    }
+  if (outcome.kind === "declined") {
+    const inv = outcome.invite;
     return html(`<h2 style="margin:0 0 10px;color:#0f172a;font-size:18px;">Thanks for letting us know</h2>
-      <p style="color:#475569;font-size:14px;line-height:1.6;">You've declined the proposed meeting${invite.title ? ` "<strong>${invite.title}</strong>"` : ""}. No problem — our team will follow up with alternative options if needed.</p>`);
+      <p style="color:#475569;font-size:14px;line-height:1.6;">You've declined the proposed meeting${inv.title ? ` "<strong>${inv.title}</strong>"` : ""}. No problem — our team will follow up with alternative options if needed.</p>`);
   }
 
-  // ── Accept ──
-  if (invite.status === "pending") {
-    await updateOne("meetingInvites", invite.id, { status: "accepted", responded_at: new Date().toISOString() });
-    await createOne("activities", {
-      user: "System", entity_type: "lead", entity_name: invite.lead_name || invite.to || "Lead",
-      activity_type: "meeting", description: `${invite.lead_name || "Lead"} ACCEPTED the meeting (${whenLine}).`,
-      created_at: new Date().toISOString(),
-    }).catch(() => {});
-    // Mirror it into the CRM calendar, linked to the lead, as a confirmed meeting.
-    await createOne("calendarEvents", {
-      title: invite.title || "Meeting", date: invite.date, time: invite.time, type: "meeting",
-      related_to: invite.lead_name, lead_id: invite.lead_id,
-      meeting_mode: invite.mode || "online", meeting_link: invite.link, location: invite.location,
-      attendees: invite.to ? [{ name: invite.lead_name || invite.to, email: invite.to, is_external: true }] : [],
-    }).catch(() => {});
-  }
-
+  // accepted
+  const { invite, cal, whenLine } = outcome;
+  const base = baseUrl(req);
   const icsUrl = `${base}/api/meeting-response?token=${encodeURIComponent(token)}&action=ics`;
   return html(`<h2 style="margin:0 0 10px;color:#16a34a;font-size:19px;">You're confirmed! 🎉</h2>
     <p style="color:#475569;font-size:14px;line-height:1.6;margin:0 0 6px;">Meeting${invite.title ? ` "<strong>${invite.title}</strong>"` : ""} on <strong>${whenLine}</strong>.</p>

@@ -16,6 +16,7 @@ type PDLCompany = {
 type PDLPerson = {
   full_name?: string; job_title?: string; linkedin_url?: string;
   work_email?: string; emails?: { address?: string }[];
+  mobile_phone?: string; phone_numbers?: string[];
 };
 
 export const pdl: EnrichmentProvider = {
@@ -72,6 +73,7 @@ export const pdl: EnrichmentProvider = {
           name:     p.full_name || "Unknown",
           title:    p.job_title || undefined,
           email:    p.work_email || p.emails?.[0]?.address || undefined,
+          phone:    p.mobile_phone || p.phone_numbers?.[0] || undefined,
           linkedin: p.linkedin_url ? (p.linkedin_url.startsWith("http") ? p.linkedin_url : `https://${p.linkedin_url}`) : undefined,
           source:   "pdl",
         }));

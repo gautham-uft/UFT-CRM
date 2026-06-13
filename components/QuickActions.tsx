@@ -7,7 +7,7 @@ import { useCurrentUser } from "@/contexts/CurrentUserContext";
 import { useNow } from "@/contexts/NowContext";
 import { useCollection } from "@/hooks/useCollection";
 import SearchableSelect from "@/components/SearchableSelect";
-import MeetingModal, { type MeetingPayload } from "@/components/MeetingModal";
+import MeetingWizard, { type MeetingWizardResult } from "@/components/MeetingWizard";
 import type { Note, NoteEntity } from "@/components/NotesSection";
 
 const inputCls = "w-full px-3 py-2 bg-[var(--surface2)] border border-[var(--border)] rounded-lg text-[var(--tx2)] text-xs placeholder:text-[var(--tx6)] focus:outline-none focus:border-[var(--a-border)] transition-colors";
@@ -25,7 +25,7 @@ const QuickActionsContext = createContext<QuickActionsContextType>({
   openScheduleMeeting: () => {}, openAssignTask: () => {}, openAddNote: () => {},
 });
 
-type AppUser = { id: string; first_name: string; last_name: string; role: string };
+type AppUser = { id: string; first_name: string; last_name: string; role: string; email?: string };
 
 export function QuickActionsProvider({ children }: { children: React.ReactNode }) {
   const { addCalendarEvent, addFollowUp, addActivity } = useAppData();
@@ -49,18 +49,10 @@ export function QuickActionsProvider({ children }: { children: React.ReactNode }
   // ── Schedule meeting ──
   const [meetingOpen, setMeetingOpen] = useState(false);
 
-  function submitMeeting(payload: MeetingPayload) {
-    addCalendarEvent(payload);
-    const modeLabel = payload.meeting_mode === "offline"
-      ? `in person${payload.location ? ` at ${payload.location}` : ""}`
-      : `online${payload.meeting_platform ? ` via ${payload.meeting_platform}` : ""}`;
-    addActivity({
-      user: author, entity_type: "meeting",
-      entity_name: payload.related_to || payload.title,
-      activity_type: "meeting",
-      description: `Scheduled meeting: ${payload.title}${payload.date ? ` on ${payload.date}` : ""} (${modeLabel})`,
-      created_at: nowISO(),
-    });
+  function finishMeeting({ meeting }: MeetingWizardResult) {
+    // addCalendarEvent logs the activity + follow-up; the wizard already sent any
+    // client email. Just persist the meeting and close.
+    if (meeting) addCalendarEvent(meeting);
     setMeetingOpen(false);
   }
 
@@ -114,13 +106,14 @@ export function QuickActionsProvider({ children }: { children: React.ReactNode }
     <QuickActionsContext.Provider value={api}>
       {children}
 
-      {/* ── Schedule Meeting ── */}
+      {/* ── Schedule Meeting (Internal / Client chooser → wizard) ── */}
       {meetingOpen && (
-        <MeetingModal
-          onClose={() => setMeetingOpen(false)}
-          onSave={submitMeeting}
-          userOptions={userOptions}
+        <MeetingWizard
+          users={users}
           today={today}
+          currentUser={currentUser}
+          onClose={() => setMeetingOpen(false)}
+          onFinish={finishMeeting}
         />
       )}
 

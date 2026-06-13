@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { mockProducts } from "@/lib/mock-data";
-import { Plus, Package, RefreshCw, Tag, X, CheckCircle } from "lucide-react";
+import { Plus, Package, RefreshCw, Tag, X, CheckCircle, List } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useCollection } from "@/hooks/useCollection";
 import { usePermissions } from "@/contexts/PermissionsContext";
@@ -28,8 +28,22 @@ export default function ProductsPage() {
   const [editForm,      setEditForm]      = useState(EMPTY_FORM);
   const [selectedDeal,  setSelectedDeal]  = useState("");
   const [toast,         setToast]         = useState("");
+  const [highlightId,   setHighlightId]   = useState<string | null>(null);
 
   function showToast(msg: string) { setToast(msg); setTimeout(() => setToast(""), 3000); }
+
+  // Arriving from global search (?focus=<id>): clear the filter so the product
+  // shows, then scroll to + highlight its card.
+  useEffect(() => {
+    const focus = new URLSearchParams(window.location.search).get("focus");
+    if (!focus || products.length === 0) return;
+    if (!products.find(x => x.id === focus)) return;
+    window.history.replaceState({}, "", "/products");
+    const t0 = setTimeout(() => { setFilter("all"); setHighlightId(focus); }, 0);
+    const t1 = setTimeout(() => document.getElementById(`product-${focus}`)?.scrollIntoView({ behavior: "smooth", block: "center" }), 200);
+    const t2 = setTimeout(() => setHighlightId(null), 2800);
+    return () => { clearTimeout(t0); clearTimeout(t1); clearTimeout(t2); };
+  }, [products]);
 
   const filtered =
     filter === "all"       ? products :
@@ -78,10 +92,16 @@ export default function ProductsPage() {
   return (
     <div className="space-y-5">
       <div className="flex items-center justify-between">
-        <div className="flex items-center gap-1 bg-[var(--surface)] border border-[var(--border)] rounded-lg p-1 w-fit">
-          {["all","active","recurring","one_time"].map(f => (
-            <button key={f} onClick={() => setFilter(f)} className={cn("px-3 py-1.5 rounded-md text-xs font-medium transition-colors", filter === f ? "bg-[var(--a)] text-white" : "text-[var(--tx4)] hover:text-[var(--tx2)]")}>
-              {f === "all" ? "All" : f === "one_time" ? "One-Time" : f.charAt(0).toUpperCase() + f.slice(1)}
+        <div className="flex items-stretch gap-1 bg-[var(--surface)] border border-[var(--border)] rounded-lg p-1 w-fit">
+          {([
+            { key: "all",       label: "All",       Icon: List },
+            { key: "active",    label: "Active",    Icon: CheckCircle },
+            { key: "recurring", label: "Recurring", Icon: RefreshCw },
+            { key: "one_time",  label: "One-Time",  Icon: Tag },
+          ] as const).map(f => (
+            <button key={f.key} onClick={() => setFilter(f.key)} aria-label={f.label} className={cn("flex flex-col items-center gap-0.5 px-2 pt-1.5 pb-1 rounded-md min-w-[56px] transition-colors", filter === f.key ? "bg-[var(--a)] text-white" : "text-[var(--tx4)] hover:text-[var(--tx2)] hover:bg-[var(--surface2)]")}>
+              <f.Icon size={16} />
+              <span className="text-[10px] font-medium leading-none">{f.label}</span>
             </button>
           ))}
         </div>
@@ -94,7 +114,7 @@ export default function ProductsPage() {
 
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
         {filtered.map(p => (
-          <div key={p.id} className="bg-[var(--surface)] border border-[var(--border)] rounded-xl p-5 hover:border-[var(--a-border)] transition-colors">
+          <div id={`product-${p.id}`} key={p.id} className={cn("bg-[var(--surface)] border border-[var(--border)] rounded-xl p-5 hover:border-[var(--a-border)] transition-colors", highlightId === p.id && "ring-2 ring-[var(--a)]")}>
             <div className="flex items-start justify-between mb-3">
               <div className="w-9 h-9 rounded-lg bg-violet-500/10 flex items-center justify-center"><Package size={16} className="text-violet-400" /></div>
               <div className="flex items-center gap-1.5">

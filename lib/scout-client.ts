@@ -1,5 +1,7 @@
 // Client helpers + shared type for the Naukri scout-verification flow.
 
+import { apiUrl } from "@/lib/api-base";
+
 export type ScoutRequest = {
   id:            string;
   lead_id:       string;
@@ -33,7 +35,7 @@ export type RequestVerificationInput = {
 
 // Create a verification request (server stores it + fires the optional webhook).
 export async function requestScoutVerification(input: RequestVerificationInput): Promise<ScoutRequest> {
-  const res = await fetch("/api/scout-request", {
+  const res = await fetch(apiUrl("/api/v1/scout/request"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input),
@@ -47,7 +49,7 @@ export async function requestScoutVerification(input: RequestVerificationInput):
 export async function respondScoutRequest(input: {
   request_id: string; status: "found" | "not_found"; naukri_url?: string; note?: string; responded_by?: string;
 }): Promise<void> {
-  const res = await fetch("/api/naukri-callback", {
+  const res = await fetch(apiUrl("/api/naukri-callback"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input),

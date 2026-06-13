@@ -11,8 +11,9 @@ import { pdl } from "./providers/pdl";
 // Priority order for filling company fields (best company data first).
 const PROVIDERS: EnrichmentProvider[] = [apollo, pdl, hunter];
 
-export function configuredProviders(): string[] {
-  return PROVIDERS.filter(p => p.isConfigured()).map(p => p.name);
+// Providers that have a key AND (when `enabled` is given) are admin-enabled.
+export function configuredProviders(enabled?: string[]): string[] {
+  return PROVIDERS.filter(p => p.isConfigured() && (!enabled || enabled.includes(p.name))).map(p => p.name);
 }
 
 // Coerce a provider's POC to safe types (providers occasionally return numbers
@@ -23,6 +24,7 @@ function normalizePoc(p: EnrichedPOC): EnrichedPOC {
     name:       str(p.name) ?? "Unknown",
     title:      str(p.title),
     email:      str(p.email),
+    phone:      str(p.phone),
     linkedin:   str(p.linkedin),
     confidence: typeof p.confidence === "number" ? p.confidence : undefined,
     source:     str(p.source) ?? "unknown",
@@ -49,6 +51,7 @@ function dedupePocs(pocs: EnrichedPOC[]): EnrichedPOC[] {
     seen.set(key, {
       ...existing,
       email:      existing.email || p.email,
+      phone:      existing.phone || p.phone,
       title:      existing.title || p.title,
       linkedin:   existing.linkedin || p.linkedin,
       confidence: existing.confidence ?? p.confidence,
@@ -69,8 +72,8 @@ function rankPocs(pocs: EnrichedPOC[]): EnrichedPOC[] {
   return [...pocs].sort((a, b) => score(b) - score(a));
 }
 
-export async function enrichLead(input: EnrichInput): Promise<EnrichmentResult> {
-  const active = PROVIDERS.filter(p => p.isConfigured());
+export async function enrichLead(input: EnrichInput, opts?: { enabled?: string[] }): Promise<EnrichmentResult> {
+  const active = PROVIDERS.filter(p => p.isConfigured() && (!opts?.enabled || opts.enabled.includes(p.name)));
   const available = active.map(p => p.name);
 
   const settled = await Promise.allSettled(active.map(p => p.enrich(input)));

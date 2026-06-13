@@ -30,6 +30,7 @@ export type ActivityItem = {
   activity_type: "call_log" | "email" | "note" | "meeting";
   description:   string;
   created_at:    string;
+  ref_id?:       string;  // links the activity to a source row (e.g. a calendar event) for cleanup
 };
 
 // ── Context interface ─────────────────────────────────────────────
@@ -38,6 +39,7 @@ interface AppDataContextType {
   calendarEvents:      CalendarEvent[];
   addCalendarEvent:    (e: Omit<CalendarEvent, "id">) => void;
   updateCalendarEvent: (id: string, patch: Partial<CalendarEvent>) => void;
+  deleteCalendarEvent: (id: string) => void;
   followUps:        FollowUpItem[];
   addFollowUp:      (item: Omit<FollowUpItem, "id">) => void;
   toggleFollowUp:   (id: string) => void;
@@ -53,6 +55,7 @@ const AppDataContext = createContext<AppDataContextType>({
   calendarEvents:      [],
   addCalendarEvent:    () => {},
   updateCalendarEvent: () => {},
+  deleteCalendarEvent: () => {},
   followUps:        [],
   addFollowUp:      () => {},
   toggleFollowUp:   () => {},
@@ -101,7 +104,8 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
   function addCalendarEvent(e: Omit<CalendarEvent, "id">) {
     createItem<CalendarEvent>("calendarEvents", e).then((created) => {
       setCalendarEvents((prev) => [...prev, created]);
-      if (e.type === "task" || e.type === "call") {
+      // Tasks, calls AND meetings surface in the Follow-ups queue.
+      if (e.type === "task" || e.type === "call" || e.type === "meeting") {
         addFollowUp({
           source:         "calendar",
           source_id:      created.id,
@@ -113,12 +117,42 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
           done:           false,
         });
       }
+      // Meetings also log an activity, linked via ref_id so deleting the meeting
+      // can remove it again.
+      if (e.type === "meeting") {
+        addActivity({
+          user:          e.assignee ?? "System",
+          entity_type:   e.lead_id ? "lead" : "meeting",
+          entity_name:   e.related_to ?? e.title,
+          activity_type: "meeting",
+          description:   `Meeting scheduled: ${e.title}${e.date ? ` on ${e.date}` : ""}${e.time ? ` at ${e.time}` : ""}`,
+          created_at:    new Date().toISOString(),
+          ref_id:        created.id,
+        });
+      }
     });
   }
 
   function updateCalendarEvent(id: string, patch: Partial<CalendarEvent>) {
     setCalendarEvents((prev) => prev.map((e) => (e.id === id ? { ...e, ...patch } : e)));
     updateItem<CalendarEvent>("calendarEvents", id, patch).catch(() => {});
+  }
+
+  // Delete a calendar event and everything derived from it: the linked
+  // follow-up (source=calendar) and any activities tagged with its ref_id — so
+  // it disappears from the calendar, dashboard, follow-ups and activities at once.
+  function deleteCalendarEvent(id: string) {
+    setCalendarEvents((prev) => prev.filter((e) => e.id !== id));
+    deleteItem("calendarEvents", id).catch(() => {});
+    setFollowUps((prev) => {
+      prev.filter((f) => f.source === "calendar" && f.source_id === id)
+          .forEach((f) => deleteItem("followUps", f.id).catch(() => {}));
+      return prev.filter((f) => !(f.source === "calendar" && f.source_id === id));
+    });
+    setActivities((prev) => {
+      prev.filter((a) => a.ref_id === id).forEach((a) => deleteItem("activities", a.id).catch(() => {}));
+      return prev.filter((a) => a.ref_id !== id);
+    });
   }
 
   function addFollowUp(item: Omit<FollowUpItem, "id">) {
@@ -166,7 +200,7 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
 
   return (
     <AppDataContext.Provider value={{
-      calendarEvents, addCalendarEvent, updateCalendarEvent,
+      calendarEvents, addCalendarEvent, updateCalendarEvent, deleteCalendarEvent,
       followUps, addFollowUp, toggleFollowUp, updateFollowUp, deleteFollowUp,
       activities, addActivity, deleteActivity,
       loading,

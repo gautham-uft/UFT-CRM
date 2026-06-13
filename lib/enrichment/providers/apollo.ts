@@ -39,6 +39,7 @@ type ApolloOrg = {
 type ApolloPerson = {
   name?: string; first_name?: string; last_name?: string; title?: string;
   email?: string; linkedin_url?: string;
+  sanitized_phone?: string; phone_numbers?: { sanitized_number?: string; raw_number?: string }[];
 };
 
 export const apollo: EnrichmentProvider = {
@@ -95,10 +96,12 @@ export const apollo: EnrichmentProvider = {
       const people: ApolloPerson[] = j?.people ?? [];
       pocs = people.map((p) => {
         const email = typeof p.email === "string" && !p.email.includes("email_not_unlocked") ? p.email : undefined;
+        const phone = p.sanitized_phone || p.phone_numbers?.[0]?.sanitized_number || p.phone_numbers?.[0]?.raw_number || undefined;
         return {
           name:     p.name || [p.first_name, p.last_name].filter(Boolean).join(" ") || "Unknown",
           title:    p.title || undefined,
           email,
+          phone,
           linkedin: p.linkedin_url || undefined,
           source:   "apollo",
         };

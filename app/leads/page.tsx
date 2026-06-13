@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { mockLeads, mockContacts, mockAccounts } from "@/lib/mock-data";
 import { useCollection } from "@/hooks/useCollection";
 import {
@@ -10,9 +10,12 @@ import {
   Users, UserPlus, ArrowRight, Flag, Pencil, Send, Inbox,
   MapPin, Link, Cake, FileText,
   Briefcase, Globe, ShieldCheck, AlertCircle,
-  Video, Film, CalendarPlus, Sparkles, Star, ExternalLink,
+  Video, Film, CalendarPlus, Sparkles, Star, ExternalLink, Upload, Download, AlertTriangle, PauseCircle,
+  List,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import CsvImportModal, { type CsvField } from "@/components/CsvImportModal";
+import { toCsv, downloadCsv } from "@/lib/csv";
 import { useAppData } from "@/contexts/AppDataContext";
 import { useNow } from "@/contexts/NowContext";
 import { usePermissions } from "@/contexts/PermissionsContext";
@@ -20,13 +23,17 @@ import { useCurrentUser } from "@/contexts/CurrentUserContext";
 import { isRestrictedRole } from "@/lib/permissions";
 import NoAccess from "@/components/NoAccess";
 import NotesSection from "@/components/NotesSection";
+import DumpPanel from "@/components/DumpPanel";
 import { useQuickActions } from "@/components/QuickActions";
-import MeetingModal, { type MeetingPayload } from "@/components/MeetingModal";
+import MeetingWizard, { type MeetingWizardResult } from "@/components/MeetingWizard";
 import { buildManpowerIntro } from "@/lib/email-templates";
 import { sendEmail } from "@/lib/email";
 import { enrichLeadRequest } from "@/lib/enrichment-client";
+import { ColumnHeader, rowMatches, type ColFilter } from "@/components/ColumnHeader";
 import type { EnrichmentResult, EnrichedPOC } from "@/lib/enrichment/types";
-import { requestScoutVerification } from "@/lib/scout-client";
+import type { ScoutRequest } from "@/lib/scout-client";
+import type { DumpRecord } from "@/lib/core/dump";
+import { apiUrl } from "@/lib/api-base";
 
 type LeadRequest = {
   id:           string;
@@ -98,6 +105,7 @@ type LeadProfile = {
 
 type Lead = (typeof mockLeads)[0] & {
   flagged?:       boolean;
+  watchlisted?:   boolean;
   date_of_birth?: string;
   address?:       string;
   linkedin?:      string;
@@ -111,55 +119,118 @@ type Contact = (typeof mockContacts)[0] & {
   address?:       string;
   linkedin?:      string;
   summary?:       string;
+  ai_summary?:    string;
 };
-type Account = (typeof mockAccounts)[0];
+type Account = (typeof mockAccounts)[0] & { ai_summary?: string };
 
 // ── Response feature ──────────────────────────────────────────────
 
-type ResponseCategory = "callback" | "postponed" | "not_interested" | "progressing";
+type ResponseCategory =
+  | "not_interested" | "suspend"
+  | "not_responding" | "postponed"      | "callback"
+  | "meeting"        | "requested_details"
+  | "progressing";
 type LeadResponse = { category: ResponseCategory; preset: string; note: string; follow_up_date?: string; logged_at: string; };
 
 type Preset = { label: string; days?: number };
 
-const RESP = [
-  { key: "callback"      as ResponseCategory, label: "Callback Requested", Icon: Phone,        cardIdle: "bg-sky-500/10 border-sky-500/20 hover:border-sky-500/40",     cardActive: "bg-sky-500/20 border-sky-500/50",     text: "text-sky-400",     badge: "bg-sky-500/15 text-sky-400 border-sky-500/30",     chipActive: "bg-sky-500/20 border-sky-500/50 text-sky-400",     presets: [{ label: "Call back in 3 days", days: 3 }, { label: "Call back next week", days: 7 }, { label: "Call back in 2 weeks", days: 14 }, { label: "Confirm timing first" }] as Preset[], showDate: true,  dateLabel: "Callback Date" },
-  { key: "postponed"     as ResponseCategory, label: "Postponed",          Icon: Clock,        cardIdle: "bg-amber-500/10 border-amber-500/20 hover:border-amber-500/40", cardActive: "bg-amber-500/20 border-amber-500/50", text: "text-amber-400",   badge: "bg-amber-500/15 text-amber-400 border-amber-500/30", chipActive: "bg-amber-500/20 border-amber-500/50 text-amber-400", presets: [{ label: "Budget freeze", days: 30 }, { label: "Not the right time", days: 14 }, { label: "Check back next quarter", days: 90 }, { label: "Internal review pending", days: 7 }] as Preset[], showDate: true,  dateLabel: "Follow-up Date" },
-  { key: "not_interested"as ResponseCategory, label: "Not Interested",     Icon: XCircle,      cardIdle: "bg-rose-500/10 border-rose-500/20 hover:border-rose-500/40",   cardActive: "bg-rose-500/20 border-rose-500/50",   text: "text-rose-400",    badge: "bg-rose-500/15 text-rose-400 border-rose-500/30",     chipActive: "bg-rose-500/20 border-rose-500/50 text-rose-400",   presets: [{ label: "Not relevant for us" }, { label: "Using a competitor" }, { label: "No budget" }, { label: "Asked to be removed" }] as Preset[],                showDate: false, dateLabel: "" },
-  { key: "progressing"   as ResponseCategory, label: "Moving Forward",     Icon: CheckCircle,  cardIdle: "bg-emerald-500/10 border-emerald-500/20 hover:border-emerald-500/40", cardActive: "bg-emerald-500/20 border-emerald-500/50", text: "text-emerald-400", badge: "bg-emerald-500/15 text-emerald-400 border-emerald-500/30", chipActive: "bg-emerald-500/20 border-emerald-500/50 text-emerald-400", presets: [{ label: "Wants more details", days: 2 }, { label: "Schedule a demo", days: 3 }, { label: "Forward to decision maker", days: 5 }, { label: "Send proposal", days: 2 }] as Preset[], showDate: false, dateLabel: "" },
+// Shared colour sets — each response inherits its temperature's colour.
+const C = {
+  rose:    { text: "text-rose-400",    badge: "bg-rose-500/15 text-rose-400 border-rose-500/30",          cardIdle: "bg-rose-500/10 border-rose-500/20 hover:border-rose-500/40",          cardActive: "bg-rose-500/20 border-rose-500/50",    chipActive: "bg-rose-500/20 border-rose-500/50 text-rose-400" },
+  amber:   { text: "text-amber-400",   badge: "bg-amber-500/15 text-amber-400 border-amber-500/30",       cardIdle: "bg-amber-500/10 border-amber-500/20 hover:border-amber-500/40",       cardActive: "bg-amber-500/20 border-amber-500/50",  chipActive: "bg-amber-500/20 border-amber-500/50 text-amber-400" },
+  sky:     { text: "text-sky-400",     badge: "bg-sky-500/15 text-sky-400 border-sky-500/30",             cardIdle: "bg-sky-500/10 border-sky-500/20 hover:border-sky-500/40",             cardActive: "bg-sky-500/20 border-sky-500/50",      chipActive: "bg-sky-500/20 border-sky-500/50 text-sky-400" },
+  emerald: { text: "text-emerald-400", badge: "bg-emerald-500/15 text-emerald-400 border-emerald-500/30", cardIdle: "bg-emerald-500/10 border-emerald-500/20 hover:border-emerald-500/40", cardActive: "bg-emerald-500/20 border-emerald-500/50", chipActive: "bg-emerald-500/20 border-emerald-500/50 text-emerald-400" },
+};
+
+// Leaf responses — what actually gets stored as the category.
+const LEAVES = [
+  { key: "not_interested"    as ResponseCategory, label: "Not Interested",     Icon: XCircle,     ...C.rose,    showDate: false, dateLabel: "",                   presets: [{ label: "Not relevant for us" }, { label: "Using a competitor" }, { label: "No budget" }, { label: "Asked to be removed" }] as Preset[] },
+  { key: "suspend"           as ResponseCategory, label: "Suspend",            Icon: PauseCircle, ...C.rose,    showDate: true,  dateLabel: "Suspension End Date", presets: [{ label: "Temporarily not interested", days: 30 }, { label: "Working with another vendor", days: 90 }, { label: "Budget on hold", days: 60 }, { label: "Revisit next quarter", days: 90 }] as Preset[] },
+  { key: "not_responding"    as ResponseCategory, label: "Not Responding",     Icon: AlertCircle, ...C.amber,   showDate: true,  dateLabel: "Retry Date",         presets: [{ label: "No answer (3+ tries)" }, { label: "Voicemail left", days: 3 }, { label: "Emails unanswered", days: 5 }, { label: "Try again later", days: 7 }] as Preset[] },
+  { key: "postponed"         as ResponseCategory, label: "Postponed",          Icon: Clock,       ...C.amber,   showDate: true,  dateLabel: "Follow-up Date", presets: [{ label: "Budget freeze", days: 30 }, { label: "Not the right time", days: 14 }, { label: "Check back next quarter", days: 90 }, { label: "Internal review pending", days: 7 }] as Preset[] },
+  { key: "callback"          as ResponseCategory, label: "Callback Requested", Icon: Phone,       ...C.amber,   showDate: true,  dateLabel: "Callback Date",  presets: [{ label: "Call back in 3 days", days: 3 }, { label: "Call back next week", days: 7 }, { label: "Call back in 2 weeks", days: 14 }, { label: "Confirm timing first" }] as Preset[] },
+  { key: "meeting"           as ResponseCategory, label: "Meeting",            Icon: Calendar,    ...C.sky,     showDate: true,  dateLabel: "Meeting Date",   presets: [{ label: "Intro call", days: 2 }, { label: "Product demo", days: 3 }, { label: "On-site visit", days: 7 }, { label: "Confirm slot" }] as Preset[] },
+  { key: "requested_details" as ResponseCategory, label: "Requested Details",  Icon: FileText,    ...C.sky,     showDate: true,  dateLabel: "Send By",        presets: [{ label: "Send brochure", days: 1 }, { label: "Pricing details", days: 2 }, { label: "Case studies", days: 3 }, { label: "Send proposal", days: 2 }] as Preset[] },
+  { key: "progressing"       as ResponseCategory, label: "Moving Forward",     Icon: CheckCircle, ...C.emerald, showDate: false, dateLabel: "",               presets: [{ label: "Wants more details", days: 2 }, { label: "Schedule a demo", days: 3 }, { label: "Forward to decision maker", days: 5 }, { label: "Send proposal", days: 2 }] as Preset[] },
 ];
 
-function getRCfg(cat: ResponseCategory) { return RESP.find(r => r.key === cat)!; }
+// Top-level temperature buckets shown first; each expands to its leaf responses.
+const TEMPERATURES = [
+  { key: "cold",    label: "Cold",         Icon: XCircle,     ...C.rose,    leaves: ["not_interested", "suspend"] as ResponseCategory[] },
+  { key: "neutral", label: "Neutral",      Icon: Clock,       ...C.amber,   leaves: ["not_responding", "postponed", "callback"] as ResponseCategory[] },
+  { key: "warm",    label: "Warm",         Icon: Sparkles,    ...C.sky,     leaves: ["meeting", "requested_details"] as ResponseCategory[] },
+  { key: "forward", label: "Move Forward", Icon: CheckCircle, ...C.emerald, leaves: ["progressing"] as ResponseCategory[] },
+];
+
+function getRCfg(cat: ResponseCategory) { return LEAVES.find(r => r.key === cat)!; }
+function tempOf(cat: ResponseCategory): string | null { return TEMPERATURES.find(t => t.leaves.includes(cat))?.key ?? null; }
 
 // ── Log Response Modal ────────────────────────────────────────────
 
-function LogResponseModal({ lead, existing, today, nowISO, onSave, onClose }: { lead: Lead; existing?: LeadResponse; today: string; nowISO: string; onSave: (r: LeadResponse, dest?: { account: boolean; contact: boolean }) => void; onClose: () => void; }) {
+function LogResponseModal({ lead, existing, today, nowISO, restricted, onSave, onClose, onPickMeeting }: { lead: Lead; existing?: LeadResponse; today: string; nowISO: string; restricted: boolean; onSave: (r: LeadResponse, dest?: { account: boolean; contact: boolean }, watchlist?: boolean) => void; onClose: () => void; onPickMeeting: () => void; }) {
+  const [temp,     setTemp]     = useState<string | null>(existing ? tempOf(existing.category) : null);
   const [category, setCategory] = useState<ResponseCategory | null>(existing?.category ?? null);
   const [preset,   setPreset]   = useState(existing?.preset ?? "");
   const [note,     setNote]     = useState(existing?.note ?? "");
   const [date,     setDate]     = useState(existing?.follow_up_date ?? "");
   const [addAccount, setAddAccount] = useState(false);
   const [addContact, setAddContact] = useState(false);
+  const [watchlist,  setWatchlist]  = useState(true); // Neutral/Warm → watch list on by default
   const activeCfg = category ? getRCfg(category) : null;
+  const tempCfg = temp ? TEMPERATURES.find(t => t.key === temp)! : null;
+
+  function pickTemp(t: (typeof TEMPERATURES)[number]) {
+    setTemp(t.key); setPreset(""); setDate("");
+    setCategory(t.leaves.length === 1 ? t.leaves[0] : null);
+  }
 
   return (
     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50">
-      <div className="bg-[var(--surface)] border border-[var(--border)] rounded-2xl p-6 w-full max-w-lg mx-4 shadow-2xl">
+      <div className="bg-[var(--surface)] border border-[var(--border)] rounded-2xl p-6 w-full max-w-lg mx-4 shadow-2xl max-h-[88vh] overflow-y-auto">
         <div className="flex items-start justify-between mb-5">
           <div><h3 className="text-[var(--tx1)] font-semibold">Log Response</h3><p className="text-[var(--tx5)] text-xs mt-0.5">{lead.first_name} {lead.last_name} · {lead.company_name}</p></div>
           <button onClick={onClose} className="text-[var(--tx5)] hover:text-[var(--tx3)] transition-colors mt-0.5"><X size={16} /></button>
         </div>
         <p className="text-[var(--tx5)] text-xs font-medium mb-2.5">What was their response?</p>
         <div className="grid grid-cols-2 gap-2 mb-4">
-          {RESP.map((cfg) => {
-            const isActive = category === cfg.key;
+          {TEMPERATURES.map((t) => {
+            const isActive = temp === t.key;
             return (
-              <button key={cfg.key} onClick={() => { setCategory(cfg.key); setPreset(""); setDate(""); }} className={cn("flex items-center gap-3 p-3.5 rounded-xl border text-left transition-all", isActive ? cfg.cardActive : cfg.cardIdle)}>
-                <div className={cn("w-7 h-7 rounded-lg flex items-center justify-center shrink-0", isActive ? cfg.cardActive : cfg.cardIdle)}><cfg.Icon size={14} className={cfg.text} /></div>
-                <span className={cn("text-xs font-medium leading-tight", isActive ? cfg.text : "text-[var(--tx3)]")}>{cfg.label}</span>
+              <button key={t.key} onClick={() => pickTemp(t)} className={cn("flex items-center gap-3 p-3.5 rounded-xl border text-left transition-all", isActive ? t.cardActive : t.cardIdle)}>
+                <div className={cn("w-7 h-7 rounded-lg flex items-center justify-center shrink-0", isActive ? t.cardActive : t.cardIdle)}><t.Icon size={14} className={t.text} /></div>
+                <span className={cn("text-xs font-medium leading-tight", isActive ? t.text : "text-[var(--tx3)]")}>{t.label}</span>
               </button>
             );
           })}
         </div>
+
+        {/* Sub-type — shown when the chosen temperature has more than one option */}
+        {tempCfg && tempCfg.leaves.length > 1 && (
+          <div className="mb-4">
+            <p className="text-[var(--tx5)] text-xs font-medium mb-2">Type</p>
+            <div className="grid grid-cols-2 gap-2">
+              {tempCfg.leaves.map((lk) => {
+                const leaf = getRCfg(lk); const active = category === lk;
+                return (
+                  <button key={lk} onClick={() => { if (lk === "meeting") { onPickMeeting(); return; } setCategory(lk); setPreset(""); setDate(""); }} className={cn("flex items-center gap-2.5 p-3 rounded-xl border text-left transition-all", active ? leaf.cardActive : leaf.cardIdle)}>
+                    <leaf.Icon size={13} className={active ? leaf.text : "text-[var(--tx5)]"} />
+                    <span className={cn("text-xs font-medium leading-tight", active ? leaf.text : "text-[var(--tx3)]")}>{leaf.label}{lk === "meeting" ? " →" : ""}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* Watch List — offered as soon as a Neutral/Warm temperature is picked, on by default */}
+        {(temp === "neutral" || temp === "warm") && (
+          <button onClick={() => setWatchlist(v => !v)} className={cn("w-full flex items-center gap-2.5 p-2.5 rounded-lg border text-left transition-all mb-4", watchlist ? "bg-amber-500/15 border-amber-500/50" : "bg-[var(--surface2)] border-[var(--border)] hover:border-[var(--a-border)]")}>
+            <Star size={14} className={cn("shrink-0", watchlist ? "fill-amber-400 text-amber-400" : "text-amber-400")} />
+            <span className={cn("text-xs font-medium flex-1", watchlist ? "text-amber-400" : "text-[var(--tx3)]")}>Add to Watch List</span>
+            <div className={cn("w-4 h-4 rounded border flex items-center justify-center shrink-0", watchlist ? "bg-amber-500 border-amber-500" : "border-[var(--tx6)]")}>{watchlist && <CheckCircle size={12} className="text-white" />}</div>
+          </button>
+        )}
+
         {activeCfg && (
           <div className="space-y-3.5 border-t border-[var(--border)] pt-4">
             <div>
@@ -185,7 +256,13 @@ function LogResponseModal({ lead, existing, today, nowISO, onSave, onClose }: { 
                 <input type="date" value={date} onChange={e => setDate(e.target.value)} className="w-full px-3 py-2 bg-[var(--surface2)] border border-[var(--border)] rounded-lg text-[var(--tx2)] text-xs focus:outline-none focus:border-[var(--a-border)] transition-colors" />
               </div>
             )}
-            {category === "progressing" && (
+            {category === "progressing" && restricted && (
+              <div className="flex items-start gap-2.5 p-3 rounded-lg bg-[var(--surface2)] border border-[var(--border)]">
+                <Send size={14} className="text-amber-400 shrink-0 mt-0.5" />
+                <p className="text-[var(--tx4)] text-xs leading-relaxed">This will be sent to your manager for approval. They&apos;ll decide whether to add it to Accounts &amp; Contacts.</p>
+              </div>
+            )}
+            {category === "progressing" && !restricted && (
               <div>
                 <p className="text-[var(--tx5)] text-xs font-medium mb-2">Add to CRM</p>
                 <div className="grid grid-cols-2 gap-2">
@@ -210,7 +287,7 @@ function LogResponseModal({ lead, existing, today, nowISO, onSave, onClose }: { 
         )}
         <div className="flex gap-3 mt-5">
           <button onClick={onClose} className="flex-1 py-2.5 bg-[var(--surface2)] border border-[var(--border)] text-[var(--tx4)] text-sm rounded-xl hover:border-[var(--a-border)] transition-colors">Cancel</button>
-          <button onClick={() => { if (!category) return; onSave({ category, preset, note, ...(date ? { follow_up_date: date } : {}), logged_at: nowISO ? new Date(nowISO).toISOString() : new Date().toISOString() }, category === "progressing" ? { account: addAccount, contact: addContact } : undefined); }} disabled={!category} className="flex-1 py-2.5 bg-[var(--a)] text-white text-sm rounded-xl hover:bg-[var(--a-hover)] font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed">Save Response</button>
+          <button onClick={() => { if (!category) return; onSave({ category, preset, note, ...(date ? { follow_up_date: date } : {}), logged_at: nowISO ? new Date(nowISO).toISOString() : new Date().toISOString() }, category === "progressing" && !restricted ? { account: addAccount, contact: addContact } : undefined, (temp === "neutral" || temp === "warm") ? watchlist : undefined); }} disabled={!category} className="flex-1 py-2.5 bg-[var(--a)] text-white text-sm rounded-xl hover:bg-[var(--a-hover)] font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed">{category === "progressing" && restricted ? "Request Approval" : "Save Response"}</button>
         </div>
       </div>
     </div>
@@ -223,6 +300,7 @@ function ApproveLeadModal({
   lead,
   createAccount,
   createContact,
+  autoSummarize,
   onApproved,
   onClose,
   initialAddAccount = true,
@@ -232,6 +310,7 @@ function ApproveLeadModal({
   lead: Lead;
   createAccount: (data: Partial<Account>) => Promise<Account>;
   createContact: (data: Partial<Contact>) => Promise<Contact>;
+  autoSummarize: (kind: "account" | "contact", id: string) => Promise<string | null>;
   onApproved: (leadId: string, message: string) => void;
   onClose: () => void;
   initialAddAccount?: boolean;
@@ -288,6 +367,8 @@ function ApproveLeadModal({
     });
     setCreatedAccount(acc);
     setSaving(false);
+    // Auto-generate the account's AI summary in the background.
+    void autoSummarize("account", acc.id);
     if (addContact) {
       setConForm(f => ({ ...f, account_name: acc.name }));
       setStep("contact");
@@ -299,7 +380,7 @@ function ApproveLeadModal({
   async function submitContact() {
     if (!conForm.first_name.trim() || !conForm.email.trim() || saving) return;
     setSaving(true);
-    await createContact({
+    const con = await createContact({
       account_id:    createdAccount?.id ?? "",
       first_name:    conForm.first_name.trim(),
       last_name:     conForm.last_name.trim(),
@@ -313,6 +394,8 @@ function ApproveLeadModal({
       summary:       conForm.summary.trim(),
     });
     setSaving(false);
+    // Auto-generate the contact's AI summary in the background.
+    void autoSummarize("contact", con.id);
     onApproved(lead.id, finishMessage());
   }
 
@@ -430,8 +513,55 @@ function ApproveLeadModal({
 
 const EMPTY_FORM = { first_name: "", last_name: "", email: "", phone: "", company_name: "", source: "inbound_web", status: "new", date_of_birth: "", address: "", linkedin: "", summary: "" };
 
+// Target fields for the CSV bulk-import column mapping.
+const CSV_FIELDS: CsvField[] = [
+  { key: "first_name",    label: "First Name", required: true, synonyms: ["firstname", "fname", "given name"] },
+  { key: "last_name",     label: "Last Name",  synonyms: ["lastname", "surname", "lname", "family name"] },
+  { key: "email",         label: "Email",      required: true, synonyms: ["e-mail", "mail", "email address"] },
+  { key: "phone",         label: "Phone",      synonyms: ["mobile", "contact", "tel", "phone number"] },
+  { key: "company_name",  label: "Company",    synonyms: ["organization", "organisation", "employer", "company name"] },
+  { key: "date_of_birth", label: "Date of Birth", synonyms: ["dob", "birthday", "birth date"] },
+  { key: "address",       label: "Address",    synonyms: ["location", "city"] },
+  { key: "linkedin",      label: "LinkedIn",   synonyms: ["linkedin url", "li"] },
+  { key: "source",        label: "Source",     synonyms: ["channel"] },
+  { key: "status",        label: "Status",     synonyms: ["stage"] },
+];
+const CSV_STATUSES = ["new", "reviewing", "approved", "rejected"];
+
+// ── Data-completeness checks ──
+// CRITICAL fields: a lead missing ANY of these is held in the "Missing
+// Information" queue and hidden from the normal lists until completed.
+const LEAD_CRITICAL: { key: string; label: string }[] = [
+  { key: "first_name",   label: "Name" },
+  { key: "email",        label: "Email" },
+  { key: "phone",        label: "Phone" },
+  { key: "company_name", label: "Company" },
+  { key: "source",       label: "Source" },
+];
+// SOFT fields: missing these only flags a caution icon; the lead still lists.
+const LEAD_SOFT: { key: string; label: string }[] = [
+  { key: "date_of_birth", label: "Date of Birth" },
+  { key: "linkedin",      label: "LinkedIn" },
+  { key: "address",       label: "Address" },
+];
+const isBlank = (v: unknown) => v === undefined || v === null || String(v).trim() === "";
+function leadMissingCritical(l: Lead): string[] {
+  const r = l as unknown as Record<string, unknown>;
+  return LEAD_CRITICAL.filter(f => isBlank(r[f.key])).map(f => f.label);
+}
+function leadMissingSoft(l: Lead): string[] {
+  const r = l as unknown as Record<string, unknown>;
+  return LEAD_SOFT.filter(f => isBlank(r[f.key])).map(f => f.label);
+}
+const leadIncomplete = (l: Lead) => leadMissingCritical(l).length > 0;
+
+// ── Duplicate detection ──
+const normEmail = (v?: unknown) => (typeof v === "string" ? v : "").trim().toLowerCase();
+const normPhone = (v?: unknown) => (typeof v === "string" ? v : "").replace(/\D/g, "");
+type DupMatch = { where: "Leads" | "Contacts"; name: string; company: string; email: string; phone: string; on: ("email" | "phone")[] };
+
 export default function LeadsPage() {
-  const { addFollowUp, addActivity, activities, calendarEvents, addCalendarEvent, updateCalendarEvent } = useAppData();
+  const { addFollowUp, addActivity, activities, calendarEvents, addCalendarEvent, updateCalendarEvent, deleteCalendarEvent } = useAppData();
   const { today, now } = useNow();
   const { ready, canRead, canWrite: canWriteFn } = usePermissions();
   const { currentUser } = useCurrentUser();
@@ -443,16 +573,22 @@ export default function LeadsPage() {
   const nowISO = () => (now ? new Date(now).toISOString() : new Date().toISOString());
 
   const { items: leads, create: createLead, update: updateLead, remove: removeLead } = useCollection<Lead>("leads");
-  const { create: createContact } = useCollection<Contact>("contacts");
-  const { create: createAccount } = useCollection<Account>("accounts");
-  const { items: leadRequests, create: createRequest, update: updateRequest } = useCollection<LeadRequest>("leadRequests");
-  const { items: users } = useCollection<{ id: string; first_name: string; last_name: string; role: string }>("users");
-  const userOptions = users.map(u => { const name = `${u.first_name} ${u.last_name}`.trim(); return { value: name, label: `${name} · ${u.role}` }; });
+  const { items: contacts, create: createContact, update: updateContact } = useCollection<Contact>("contacts");
+  const { create: createAccount, update: updateAccount } = useCollection<Account>("accounts");
+  const { items: leadRequests, create: createRequest, update: updateRequest, remove: removeRequest } = useCollection<LeadRequest>("leadRequests");
+  const { items: dumps, create: createDump, update: updateDump } = useCollection<DumpRecord>("dump");
+  const { items: users } = useCollection<{ id: string; first_name: string; last_name: string; role: string; email?: string }>("users");
   const scoutUsers = users.filter(u => u.role === "Scout");
+  const { create: createScoutRequest } = useCollection<ScoutRequest>("scoutRequests");
   const [activeRequestId,   setActiveRequestId]   = useState<string | null>(null);
   const [selected,          setSelected]          = useState<Set<string>>(new Set());
   const [filter,            setFilter]            = useState("all");
+  const [colFilters,        setColFilters]        = useState<Record<string, ColFilter>>({});
   const [showAddModal,      setShowAddModal]      = useState(false);
+  const [showImport,        setShowImport]        = useState(false);
+  const [watchOnly,         setWatchOnly]         = useState(false);
+  const [dupModal,          setDupModal]          = useState<{ form: typeof EMPTY_FORM; matches: DupMatch[] } | null>(null);
+  const [highlightId,       setHighlightId]       = useState<string | null>(null);
   const [viewLead,          setViewLead]          = useState<Lead | null>(null);
   const [editLead,          setEditLead]          = useState<Lead | null>(null);
   const [editForm,          setEditForm]          = useState(EMPTY_FORM);
@@ -471,6 +607,8 @@ export default function LeadsPage() {
   const [editingProfile,  setEditingProfile]  = useState(false);
   const EMPTY_PROF: { industry: string; company_size: string; website: string; open_roles: string; poc_name: string; poc_title: string; poc_email: string; poc_linkedin: string; naukri_status: LeadProfile["naukri_status"] | ""; naukri_url: string; internal_notes: string } = { industry: "", company_size: "", website: "", open_roles: "", poc_name: "", poc_title: "", poc_email: "", poc_linkedin: "", naukri_status: "", naukri_url: "", internal_notes: "" };
   const [profileForm,     setProfileForm]     = useState(EMPTY_PROF);
+  const [aiBusy,          setAiBusy]          = useState(false);
+  const [aiError,         setAiError]         = useState("");
 
   function openProfileEdit(lead: Lead) {
     const p = lead.profile ?? {};
@@ -525,21 +663,31 @@ export default function LeadsPage() {
         .sort((a, b) => `${b.date}${b.time ?? ""}`.localeCompare(`${a.date}${a.time ?? ""}`))
     : [];
 
-  function handleSaveMeeting(payload: MeetingPayload) {
-    if (!meetingModalLead) return;
-    addCalendarEvent(payload);
-    const modeLabel = payload.meeting_mode === "offline"
-      ? `in person${payload.location ? ` at ${payload.location}` : ""}`
-      : `online${payload.meeting_platform ? ` via ${payload.meeting_platform}` : ""}`;
-    addActivity({
-      user: userName, entity_type: "lead",
-      entity_name: `${meetingModalLead.first_name} ${meetingModalLead.last_name}`,
-      activity_type: "meeting",
-      description: `Scheduled meeting: ${payload.title} on ${payload.date} (${modeLabel})`,
-      created_at: nowISO(),
-    });
+  function handleWizardFinish({ meeting, emailTo, ccCount }: MeetingWizardResult) {
+    const lead = meetingModalLead;
+    if (!lead) return;
+    const entityName = `${lead.first_name} ${lead.last_name}`.trim();
+    // Schedule the meeting — addCalendarEvent logs its own activity + follow-up.
+    if (meeting) addCalendarEvent(meeting);
+    // Scheduling a meeting advances a brand-new lead into the pipeline.
+    if (meeting && lead.status === "new") {
+      updateLead(lead.id, { status: "reviewing" });
+      setViewLead(prev => (prev && prev.id === lead.id ? { ...prev, status: "reviewing" } : prev));
+    }
+    // Record the email (client audience only).
+    if (emailTo) {
+      const sentAt = nowISO();
+      updateLead(lead.id, { email_sent_at: sentAt, email_status: "sent" });
+      setViewLead(prev => prev && prev.id === lead.id ? { ...prev, email_sent_at: sentAt, email_status: "sent" } : prev);
+      addActivity({
+        user: userName, entity_type: "lead", entity_name: entityName,
+        activity_type: "email",
+        description: `Sent company details email to ${emailTo}${ccCount ? ` (cc ${ccCount})` : ""}`,
+        created_at: sentAt,
+      });
+    }
     setMeetingModalLead(null);
-    showToast("Meeting scheduled");
+    showToast(emailTo ? (meeting ? "Meeting scheduled & email sent" : "Email sent") : "Meeting scheduled");
   }
 
   function startRecordingEdit(meetingId: string, current?: string) {
@@ -621,10 +769,81 @@ export default function LeadsPage() {
   const pendingRequests = leadRequests.filter(r => r.status === "pending");
   const hasPending = (id: string) => pendingByLead.has(id);
 
-  const filtered =
-    filter === "all"       ? leads.filter(l => l.status !== "approved")
-    : filter === "incorrect" ? leads.filter(l => l.flagged)
-    : leads.filter(l => l.status === filter);
+  // The Watch List is a curated cross-cutting view (not a status filter): when
+  // on, it shows every watch-listed lead regardless of tab. Leads missing a
+  // CRITICAL field otherwise live ONLY in the "Missing Information" tab.
+  // A lead is "acted on" once it leaves "new" OR a response has been logged.
+  const isActedOn = (l: Lead) => l.status !== "new" || !!responses[l.id];
+  const base = watchOnly
+    ? leads.filter(l => l.watchlisted)
+    : filter === "missing"     ? leads.filter(leadIncomplete)
+    : filter === "incorrect"   ? leads.filter(l => l.flagged && !leadIncomplete(l))
+    : filter === "naukri"      ? leads.filter(l => l.profile?.naukri_status === "found" && !leadIncomplete(l))
+    : filter === "requested"   ? leads.filter(l => hasPending(l.id) && !leadIncomplete(l))
+    : filter === "all"         ? leads.filter(l => l.status !== "approved" && !leadIncomplete(l))
+    : leads.filter(l => l.status === filter && !leadIncomplete(l));
+
+  // Column-header filters (text search / source+status dropdowns / date range).
+  const leadColGetters: Record<string, (l: Lead) => string> = {
+    name:    l => `${l.first_name} ${l.last_name}`,
+    email:   l => l.email ?? "",
+    company: l => l.company_name ?? "",
+    source:  l => sourceLabels[l.source] ?? l.source,
+    status:  l => l.status,
+    date:    l => l.created_at ?? "",
+  };
+  const colFiltered = base.filter(l => rowMatches(l, colFilters, leadColGetters));
+
+  // In the "All" view, sink acted-on leads to the bottom (stable sort).
+  const filtered = (filter === "all" && !watchOnly)
+    ? [...colFiltered].sort((a, b) => Number(isActedOn(a)) - Number(isActedOn(b)))
+    : colFiltered;
+
+  const missingCount = leads.filter(leadIncomplete).length;
+  const watchCount = leads.filter(l => l.watchlisted).length;
+  const naukriCount = leads.filter(l => l.profile?.naukri_status === "found").length;
+  const requestedCount = leads.filter(l => hasPending(l.id)).length;
+  // Choosing a status tab leaves Watch List mode.
+  const pickFilter = (s: string) => { setFilter(s); setWatchOnly(false); };
+  const setCol = (key: string, v: ColFilter) => setColFilters(f => {
+    const next = { ...f };
+    if (v.q || v.from || v.to) next[key] = v; else delete next[key];
+    return next;
+  });
+
+  // Arriving from global search (?focus=<id>): switch to a filter that shows the
+  // lead, then scroll to + highlight its row.
+  useEffect(() => {
+    const focus = new URLSearchParams(window.location.search).get("focus");
+    if (!focus || leads.length === 0) return;
+    const l = leads.find(x => x.id === focus);
+    if (!l) return;
+    window.history.replaceState({}, "", "/leads");
+    const t0 = setTimeout(() => {
+      setWatchOnly(false);
+      setFilter(leadIncomplete(l) ? "missing" : l.status === "approved" ? "approved" : "all");
+      setHighlightId(focus);
+    }, 0);
+    const t1 = setTimeout(() => document.getElementById(`lead-${focus}`)?.scrollIntoView({ behavior: "smooth", block: "center" }), 200);
+    const t2 = setTimeout(() => setHighlightId(null), 2800);
+    return () => { clearTimeout(t0); clearTimeout(t1); clearTimeout(t2); };
+  }, [leads]);
+
+  // Find existing Leads/Contacts that match the given email or phone.
+  function findDuplicates(email: string, phone: string, excludeLeadId?: string): DupMatch[] {
+    const e = normEmail(email), p = normPhone(phone);
+    if (!e && !p) return [];
+    const out: DupMatch[] = [];
+    const consider = (where: "Leads" | "Contacts", name: string, company: string, recEmail: unknown, recPhone: unknown) => {
+      const on: ("email" | "phone")[] = [];
+      if (e && normEmail(recEmail) === e) on.push("email");
+      if (p && normPhone(recPhone) === p) on.push("phone");
+      if (on.length) out.push({ where, name: name.trim() || "—", company: company || "—", email: typeof recEmail === "string" ? recEmail : "", phone: typeof recPhone === "string" ? recPhone : "", on });
+    };
+    leads.forEach(l => { if (l.id !== excludeLeadId) consider("Leads", `${l.first_name} ${l.last_name}`, l.company_name, l.email, l.phone); });
+    contacts.forEach(c => { const r = c as unknown as Record<string, unknown>; consider("Contacts", `${r.first_name ?? ""} ${r.last_name ?? ""}`, String(r.account_name ?? ""), r.email, r.phone); });
+    return out;
+  }
 
   // ── Approval-request workflow ──────────────────────────────────────
   function handleRequestApproval(lead: Lead) {
@@ -644,6 +863,21 @@ export default function LeadsPage() {
     });
     showToast("Approval requested");
     if (viewLead?.id === lead.id) setViewLead(null);
+  }
+  // Withdraw a still-pending approval request the current user raised.
+  function undoApprovalRequest(lead: Lead) {
+    const req = pendingByLead.get(lead.id);
+    if (!req) return;
+    removeRequest(req.id);
+    if (lead.status === "reviewing") {
+      updateLead(lead.id, { status: "new" });
+      setViewLead(prev => prev && prev.id === lead.id ? { ...prev, status: "new" } : prev);
+    }
+    addActivity({
+      user: userName, entity_type: "lead", entity_name: `${lead.first_name} ${lead.last_name}`,
+      activity_type: "note", description: `Withdrew approval request for ${lead.company_name || "lead"}`, created_at: nowISO(),
+    });
+    showToast("Approval request withdrawn");
   }
   function startApproveRequest(req: LeadRequest) {
     const lead = leads.find(l => l.id === req.lead_id);
@@ -724,7 +958,7 @@ export default function LeadsPage() {
         contacts:       1,
         deals:          0,
       });
-      await createContact({
+      const con = await createContact({
         account_id:    acc.id,
         first_name:    lead.first_name,
         last_name:     lead.last_name,
@@ -737,6 +971,9 @@ export default function LeadsPage() {
         linkedin:      lead.linkedin ?? "",
         summary:       lead.summary ?? "",
       });
+      // Auto-generate AI summaries for the new records (background).
+      void autoSummarize("account", acc.id);
+      void autoSummarize("contact", con.id);
       updateLead(id, { status: "approved" });
     }
     showToast(`${ids.length} lead${ids.length > 1 ? "s" : ""} approved → added to Accounts & Contacts`);
@@ -764,25 +1001,138 @@ export default function LeadsPage() {
       showToast("2 new leads synced from Apify");
     }, 1800);
   }
-  function handleAddLead() {
-    if (!addForm.first_name.trim() || !addForm.email.trim()) return;
+  async function generateLeadSummary(lead: Lead) {
+    setAiBusy(true); setAiError("");
+    try {
+      const res = await fetch(apiUrl("/api/v1/ai/lead-summary"), {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: lead.id }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error((data as { error?: string })?.error || `Failed (${res.status})`);
+      const summary = String((data as { summary?: string }).summary ?? "").trim();
+      updateLead(lead.id, { summary });
+      setViewLead(prev => (prev && prev.id === lead.id ? { ...prev, summary } : prev));
+    } catch (err) {
+      setAiError(err instanceof Error ? err.message : "Failed to generate summary.");
+    } finally {
+      setAiBusy(false);
+    }
+  }
+
+  // Auto-generate the AI summary for a freshly converted Account/Contact. Patches
+  // the new record on success; on failure the user can type one or switch the
+  // model from the record's detail view. Returns the error message (if any).
+  async function autoSummarize(kind: "account" | "contact", id: string): Promise<string | null> {
+    try {
+      const res = await fetch(apiUrl("/api/v1/ai/entity-summary"), {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ kind, id }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error((data as { error?: string })?.error || `Failed (${res.status})`);
+      const summary = String((data as { summary?: string }).summary ?? "").trim();
+      if (kind === "account") updateAccount(id, { ai_summary: summary });
+      else updateContact(id, { ai_summary: summary });
+      return null;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "AI summary failed.";
+      showToast(`AI summary failed — open the ${kind} to type one or change the model. (${msg})`);
+      return msg;
+    }
+  }
+
+  async function handleExportCsv() {
+    const columns = [
+      { key: "id", label: "ID" },
+      { key: "first_name", label: "First Name" },
+      { key: "last_name", label: "Last Name" },
+      { key: "email", label: "Email" },
+      { key: "phone", label: "Phone" },
+      { key: "company_name", label: "Company" },
+      { key: "source", label: "Source" },
+      { key: "status", label: "Status" },
+      { key: "date_of_birth", label: "Date of Birth" },
+      { key: "address", label: "Address" },
+      { key: "linkedin", label: "LinkedIn" },
+      { key: "created_at", label: "Created" },
+    ];
+    if (leads.length === 0) { showToast("No leads to export"); return; }
+    const date = (now ? new Date(now) : new Date()).toISOString().slice(0, 10);
+    const saved = await downloadCsv(`leads-export-${date}.csv`, toCsv(leads as unknown as Record<string, unknown>[], columns));
+    if (saved) showToast(`Exported ${leads.length} lead${leads.length !== 1 ? "s" : ""} to CSV`);
+  }
+
+  // Stash extra info in the hidden dump, linked to an entity (merges, never
+  // overwrites existing keys, so no data is lost).
+  async function saveDumpFor(entity_type: string, entity_id: string, entity_name: string, data: Record<string, unknown>) {
+    const clean: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(data)) { if (v != null && String(v).trim() !== "") clean[k] = v; }
+    if (Object.keys(clean).length === 0) return;
+    const iso = nowISO();
+    const existing = dumps.find(d => d.entity_type === entity_type && d.entity_id === entity_id);
+    if (existing) await updateDump(existing.id, { entity_name: entity_name || existing.entity_name, data: { ...existing.data, ...clean }, updated_at: iso });
+    else await createDump({ entity_type, entity_id, entity_name, data: clean, created_at: iso, updated_at: iso });
+  }
+
+  async function handleCsvImport(importRows: Record<string, string>[]) {
+    const today = new Date().toISOString().slice(0, 10);
+    let n = 0;
+    for (const r of importRows) {
+      const first_name = (r.first_name ?? "").trim();
+      const email = (r.email ?? "").trim();
+      if (!first_name || !email) continue;
+      const status = CSV_STATUSES.includes((r.status ?? "").trim()) ? (r.status ?? "").trim() : "new";
+      const lead = await createLead({
+        first_name,
+        last_name:     (r.last_name ?? "").trim(),
+        email,
+        phone:         (r.phone ?? "").trim(),
+        company_name:  (r.company_name ?? "").trim(),
+        source:        (r.source ?? "").trim() || "inbound_web",
+        status,
+        created_at:    today,
+        date_of_birth: (r.date_of_birth ?? "").trim(),
+        address:       (r.address ?? "").trim(),
+        linkedin:      (r.linkedin ?? "").trim(),
+      });
+      // Keep any unmapped CSV columns in the dump, linked to this lead.
+      if (r.__extra && lead?.id) {
+        try {
+          const extra = JSON.parse(r.__extra) as Record<string, unknown>;
+          await saveDumpFor("lead", lead.id, `${first_name} ${(r.last_name ?? "").trim()}`.trim(), extra);
+        } catch { /* ignore malformed extra */ }
+      }
+      n++;
+    }
+    showToast(`${n} lead${n !== 1 ? "s" : ""} imported from CSV`);
+  }
+
+  function commitAddLead(f: typeof EMPTY_FORM) {
     createLead({
-      first_name:   addForm.first_name.trim(),
-      last_name:    addForm.last_name.trim(),
-      email:        addForm.email.trim(),
-      phone:        addForm.phone.trim(),
-      company_name:  addForm.company_name.trim(),
-      source:        addForm.source || "inbound_web",
-      status:        addForm.status,
+      first_name:   f.first_name.trim(),
+      last_name:    f.last_name.trim(),
+      email:        f.email.trim(),
+      phone:        f.phone.trim(),
+      company_name:  f.company_name.trim(),
+      source:        f.source || "inbound_web",
+      status:        f.status,
       created_at:    new Date().toISOString().slice(0,10),
-      date_of_birth: addForm.date_of_birth,
-      address:       addForm.address.trim(),
-      linkedin:      addForm.linkedin.trim(),
-      summary:       addForm.summary.trim(),
+      date_of_birth: f.date_of_birth,
+      address:       f.address.trim(),
+      linkedin:      f.linkedin.trim(),
+      summary:       f.summary.trim(),
     });
     setAddForm(EMPTY_FORM);
     setShowAddModal(false);
+    setDupModal(null);
     showToast("Lead added");
+  }
+  function handleAddLead() {
+    if (!addForm.first_name.trim() || !addForm.email.trim()) return;
+    // A person may reappear with the same phone but a new email (changed jobs),
+    // so flag a match on EITHER email or phone, in Leads or Contacts.
+    const matches = findDuplicates(addForm.email, addForm.phone);
+    if (matches.length > 0) { setDupModal({ form: { ...addForm }, matches }); return; }
+    commitAddLead(addForm);
   }
   function startEditLead(lead: Lead) {
     setEditForm({
@@ -820,14 +1170,22 @@ export default function LeadsPage() {
     setEditLead(null);
     showToast("Lead updated");
   }
-  function saveResponse(r: LeadResponse, dest?: { account: boolean; contact: boolean }) {
+  function saveResponse(r: LeadResponse, dest?: { account: boolean; contact: boolean }, watchlist?: boolean) {
     if (!responseModalLead) return;
     const lead = responseModalLead;
     setResponses(prev => ({ ...prev, [lead.id]: r }));
-    if (r.category === "callback" || r.category === "postponed") {
-      addFollowUp({ source: "lead", source_id: lead.id, entity_name: `${lead.first_name} ${lead.last_name} · ${lead.company_name}`, category: r.category, note: r.preset || r.note || undefined, follow_up_date: r.follow_up_date, logged_at: r.logged_at, done: false });
-      // A callback request or postponement means the lead is now being worked —
-      // move it out of the "new" bucket and into "reviewing".
+    // Neutral / Warm responses can add (or remove) the lead from the Watch List.
+    if (watchlist !== undefined && watchlist !== !!lead.watchlisted) {
+      updateLead(lead.id, { watchlisted: watchlist });
+      setViewLead(prev => (prev && prev.id === lead.id ? { ...prev, watchlisted: watchlist } : prev));
+    }
+    // Any "still-working" response (everything except a flat Not Interested or the
+    // Move-Forward approve flow) drops a follow-up and moves the lead to reviewing.
+    const FOLLOWUP_CATS: ResponseCategory[] = ["callback", "postponed", "not_responding", "meeting", "requested_details", "suspend"];
+    if (FOLLOWUP_CATS.includes(r.category)) {
+      // Default an undated response to today so the task surfaces as actionable
+      // (rather than sitting indefinitely in the undated "Upcoming" bucket).
+      addFollowUp({ source: "lead", source_id: lead.id, entity_name: `${lead.first_name} ${lead.last_name} · ${lead.company_name}`, category: r.category, note: r.preset || r.note || undefined, follow_up_date: r.follow_up_date || today, logged_at: r.logged_at, done: false });
       if (lead.status === "new") {
         updateLead(lead.id, { status: "reviewing" });
         setViewLead(prev => (prev && prev.id === lead.id ? { ...prev, status: "reviewing" } : prev));
@@ -835,9 +1193,15 @@ export default function LeadsPage() {
     }
     setResponseModalLead(null);
     showToast("Response saved");
-    if (r.category === "progressing" && dest && (dest.account || dest.contact)) {
-      setApprovePreset({ account: dest.account, contact: dest.contact });
-      setApproveLead(lead);
+    if (r.category === "progressing") {
+      if (restricted) {
+        // Executives can't add to Accounts/Contacts — they raise an approval
+        // request; the approver picks Accounts/Contacts at approval time.
+        handleRequestApproval(lead);
+      } else if (dest && (dest.account || dest.contact)) {
+        setApprovePreset({ account: dest.account, contact: dest.contact });
+        setApproveLead(lead);
+      }
     }
   }
 
@@ -846,6 +1210,7 @@ export default function LeadsPage() {
   const [enrichLoading, setEnrichLoading] = useState(false);
   const [enrichResult,  setEnrichResult]  = useState<EnrichmentResult | null>(null);
   const [enrichError,   setEnrichError]   = useState("");
+  const [detailsBusyId, setDetailsBusyId] = useState<string | null>(null);
 
   function domainOf(lead: Lead): string | undefined {
     if (lead.email.includes("@")) return lead.email.split("@")[1].trim().toLowerCase();
@@ -913,6 +1278,68 @@ export default function LeadsPage() {
     showToast(`${poc.name} set as first point of contact`);
   }
 
+  // One-click enrichment for the Missing Information queue: run the providers
+  // (Apollo/Hunter/PDL) and auto-fill any blank fields, then the lead drops out
+  // of the missing queue. Picks the POC matching the lead's email, else the
+  // top-ranked contact at the company.
+  async function getDetailsForLead(lead: Lead) {
+    setDetailsBusyId(lead.id);
+    try {
+      const result = await enrichLeadRequest({ company_name: lead.company_name || undefined, domain: domainOf(lead) });
+      const c = result.company;
+      const blank = (v: unknown) => v === undefined || v === null || String(v).trim() === "";
+
+      // Identify THIS lead among the company contacts — by email if we have one,
+      // else by an exact full-name match. Never fill personal fields from an
+      // unmatched contact (that would attach someone else's email/phone).
+      const leadEmail = (lead.email || "").toLowerCase();
+      const fullName = `${lead.first_name ?? ""} ${lead.last_name ?? ""}`.trim().toLowerCase();
+      const self =
+        (leadEmail ? result.pocs.find(p => p.email && p.email.toLowerCase() === leadEmail) : undefined) ||
+        (fullName ? result.pocs.find(p => p.name && p.name.trim().toLowerCase() === fullName) : undefined);
+      const companyPoc = result.pocs[0]; // top-ranked contact at the company (for the profile)
+
+      const patch: Partial<Lead> = {};
+      if (blank(lead.company_name) && c.name)     patch.company_name = c.name;
+      if (blank(lead.address)      && c.location) patch.address      = c.location;
+      if (self) {
+        if (blank(lead.email)    && self.email)    patch.email    = self.email;
+        if (blank(lead.phone)    && self.phone)    patch.phone    = self.phone;
+        if (blank(lead.linkedin) && self.linkedin) patch.linkedin = self.linkedin;
+      }
+      const filledCount = Object.keys(patch).length;
+
+      patch.profile = {
+        ...lead.profile,
+        industry:     lead.profile?.industry     || c.industry,
+        company_size: lead.profile?.company_size || c.size,
+        website:      lead.profile?.website      || c.website,
+        poc_name:     lead.profile?.poc_name     || companyPoc?.name,
+        poc_title:    lead.profile?.poc_title    || companyPoc?.title,
+        poc_email:    lead.profile?.poc_email    || companyPoc?.email,
+        poc_linkedin: lead.profile?.poc_linkedin || companyPoc?.linkedin,
+        enriched_at:     new Date().toISOString().slice(0, 10),
+        enrichment_from: result.providers_used.join(", ") || undefined,
+        last_updated:    new Date().toISOString().slice(0, 10),
+      };
+
+      updateLead(lead.id, patch);
+      setViewLead(prev => (prev && prev.id === lead.id ? { ...prev, ...patch } : prev));
+
+      if (filledCount > 0) {
+        showToast(`Filled ${filledCount} field${filledCount !== 1 ? "s" : ""} from ${result.providers_used.join(", ") || "enrichment"}`);
+      } else if (result.providers_used.length === 0 && result.provider_errors) {
+        showToast("Enrichment unavailable — check provider API keys");
+      } else {
+        showToast("No new details found to fill");
+      }
+    } catch (err) {
+      showToast((err as Error).message);
+    } finally {
+      setDetailsBusyId(null);
+    }
+  }
+
   // ── Naukri scout verification ──
   const [naukriScout,   setNaukriScout]   = useState("");
   const [naukriSending, setNaukriSending] = useState(false);
@@ -922,7 +1349,9 @@ export default function LeadsPage() {
     setNaukriSending(true);
     const p = lead.profile ?? {};
     try {
-      const created = await requestScoutVerification({
+      // Create through the normal data layer so it lands in the offline-first
+      // store (and mirrors to the cloud) — the scout's queue reads from there.
+      const created = await createScoutRequest({
         lead_id:      lead.id,
         lead_name:    `${lead.first_name} ${lead.last_name}`.trim(),
         company_name: lead.company_name,
@@ -932,7 +1361,12 @@ export default function LeadsPage() {
         poc_linkedin: p.poc_linkedin,
         requested_by: userName,
         assigned_to:  naukriScout || undefined,
+        status:       "pending",
+        requested_at: nowISO(),
       });
+      // Best-effort: forward to the external uftech.in TA module if a webhook
+      // is configured (no DB write — this route only relays).
+      fetch(apiUrl("/api/v1/scout/request"), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(created) }).catch(() => {});
       const patch: Partial<Lead> = {
         profile: { ...p, naukri_status: "pending_verification", last_updated: new Date().toISOString().slice(0, 10) },
       };
@@ -964,6 +1398,20 @@ export default function LeadsPage() {
 
   if (ready && !canRead("Leads")) return <NoAccess module="Leads" />;
 
+  // Left group: compact filters with the name shown below the icon.
+  const NEUTRAL_ACTIVE = "bg-[var(--a)] text-white";
+  const NEUTRAL_IDLE = "text-[var(--tx4)] hover:text-[var(--tx2)] hover:bg-[var(--surface2)]";
+  const filterTabs: { key: string; label: string; Icon: typeof Clock; activeCls: string; idleCls: string; count?: number; badgeCls?: string }[] = [
+    { key: "all",       label: "All",       Icon: List,          activeCls: NEUTRAL_ACTIVE,              idleCls: NEUTRAL_IDLE },
+    { key: "new",       label: "New",       Icon: Clock,         activeCls: NEUTRAL_ACTIVE,              idleCls: NEUTRAL_IDLE },
+    { key: "reviewing", label: "Reviewing", Icon: Activity,      activeCls: NEUTRAL_ACTIVE,              idleCls: NEUTRAL_IDLE },
+    { key: "approved",  label: "Approved",  Icon: CheckCircle,   activeCls: "bg-emerald-500 text-white", idleCls: NEUTRAL_IDLE },
+    { key: "rejected",  label: "Rejected",  Icon: XCircle,       activeCls: "bg-rose-500 text-white",    idleCls: NEUTRAL_IDLE },
+    { key: "missing",   label: "Missing",   Icon: AlertTriangle, activeCls: "bg-amber-500 text-white",   idleCls: "text-amber-400 hover:bg-amber-500/10",     count: missingCount, badgeCls: "bg-amber-500 text-white" },
+    { key: "incorrect", label: "Incorrect", Icon: Flag,          activeCls: "bg-rose-500 text-white",    idleCls: "text-rose-400 hover:bg-rose-500/10" },
+    { key: "naukri",    label: "Naukri",    Icon: ShieldCheck,   activeCls: "bg-emerald-500 text-white", idleCls: "text-emerald-400 hover:bg-emerald-500/10", count: naukriCount,  badgeCls: "bg-emerald-500 text-white" },
+  ];
+
   return (
     <div className="flex flex-col gap-4">
 
@@ -983,72 +1431,122 @@ export default function LeadsPage() {
                 <button onClick={handleBulkDelete}  className="flex items-center gap-2 px-3 py-1.5 bg-rose-500/20 border border-rose-500/40 text-rose-300 text-xs rounded-lg hover:bg-rose-500/30 transition-colors"><Trash2 size={13} /> Delete</button>
               </>
             )}
-            <button onClick={handleSyncApify} disabled={syncing} className="flex items-center gap-2 px-3 py-1.5 bg-[var(--surface2)] border border-[var(--border)] text-[var(--tx4)] text-xs rounded-lg hover:border-[var(--a-border)] transition-colors disabled:opacity-60">
-              {syncing ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />}
-              {syncing ? "Syncing…" : "Sync Apify"}
+            <button onClick={handleSyncApify} disabled={syncing} className="flex flex-col items-center gap-0.5 px-2.5 py-1.5 bg-[var(--surface2)] border border-[var(--border)] text-[var(--tx4)] rounded-lg hover:border-[var(--a-border)] transition-colors disabled:opacity-60 min-w-[56px]">
+              {syncing ? <Loader2 size={16} className="animate-spin" /> : <RefreshCw size={16} />}
+              <span className="text-[10px] leading-none">{syncing ? "Syncing…" : "Sync"}</span>
             </button>
-            <button onClick={() => openAddNote()} className="flex items-center gap-2 px-3 py-1.5 bg-[var(--surface2)] border border-[var(--border)] text-[var(--tx4)] text-xs rounded-lg hover:border-[var(--a-border)] transition-colors"><MessageSquare size={13} /> Add Note</button>
-            <button onClick={() => setShowAddModal(true)} className="flex items-center gap-2 px-3 py-1.5 bg-[var(--a)] text-white text-xs rounded-lg hover:bg-[var(--a-hover)] transition-colors"><Plus size={13} /> Add Lead</button>
+            <button onClick={() => openAddNote()} className="flex flex-col items-center gap-0.5 px-2.5 py-1.5 bg-[var(--surface2)] border border-[var(--border)] text-[var(--tx4)] rounded-lg hover:border-[var(--a-border)] transition-colors min-w-[56px]"><MessageSquare size={16} /><span className="text-[10px] leading-none">Add Note</span></button>
+            <button onClick={() => setShowImport(true)} className="flex flex-col items-center gap-0.5 px-2.5 py-1.5 bg-[var(--surface2)] border border-[var(--border)] text-[var(--tx4)] rounded-lg hover:border-[var(--a-border)] transition-colors min-w-[56px]"><Upload size={16} /><span className="text-[10px] leading-none">Import</span></button>
+            <button onClick={handleExportCsv} className="flex flex-col items-center gap-0.5 px-2.5 py-1.5 bg-[var(--surface2)] border border-[var(--border)] text-[var(--tx4)] rounded-lg hover:border-[var(--a-border)] transition-colors min-w-[56px]"><Download size={16} /><span className="text-[10px] leading-none">Export</span></button>
+            <button onClick={() => setShowAddModal(true)} className="flex flex-col items-center gap-0.5 px-2.5 py-1.5 bg-[var(--a)] text-white rounded-lg hover:bg-[var(--a-hover)] transition-colors min-w-[56px]"><Plus size={16} /><span className="text-[10px] leading-none">Add Lead</span></button>
           </div>
           )}
         </div>
 
-        {/* Filter tabs */}
-        <div className="flex items-stretch gap-1 bg-[var(--surface)] border border-[var(--border)] rounded-lg p-1 w-fit">
-          {["all","new","reviewing","approved","rejected"].map(s => (
-            <button key={s} onClick={() => setFilter(s)} className={cn("px-3 py-1.5 rounded-md text-xs font-medium transition-colors capitalize", filter === s ? "bg-[var(--a)] text-white" : "text-[var(--tx4)] hover:text-[var(--tx2)]")}>
-              {s === "all" ? "All" : s}
-            </button>
-          ))}
-          <button
-            onClick={() => setFilter("incorrect")}
-            className={cn(
-              "px-3 py-1 rounded-md text-[11px] font-medium leading-tight text-center transition-colors flex items-center",
-              filter === "incorrect" ? "bg-rose-500 text-white" : "text-rose-400 hover:bg-rose-500/10"
+        {/* Filter tabs (icon + name below) · right: requests + Watch List */}
+        <div className="flex items-end justify-between gap-2 flex-wrap">
+          <div className="flex items-stretch gap-1 bg-[var(--surface)] border border-[var(--border)] rounded-lg p-1 w-fit">
+          {filterTabs.map(t => {
+            const isActive = filter === t.key && !watchOnly;
+            return (
+              <button
+                key={t.key}
+                onClick={() => pickFilter(t.key)}
+                aria-label={t.label}
+                className={cn("relative flex flex-col items-center gap-0.5 px-2 pt-1.5 pb-1 rounded-md min-w-[56px] transition-colors", isActive ? t.activeCls : t.idleCls)}
+              >
+                <t.Icon size={16} />
+                <span className="text-[10px] font-medium leading-none">{t.label}</span>
+                {t.count ? (
+                  <span className={cn("absolute top-0.5 right-0.5 min-w-[15px] h-[15px] px-1 text-[9px] font-bold rounded-full flex items-center justify-center leading-none",
+                    isActive ? "bg-white/30 text-white" : t.badgeCls)}>{t.count}</span>
+                ) : null}
+              </button>
+            );
+          })}
+          </div>
+
+          {/* Right group: approval view (role-dependent) + Watch List */}
+          <div className="flex items-center gap-2 shrink-0">
+            {/* Executives track their own pending requests; AM and higher don't. */}
+            {restricted && (
+              <button
+                onClick={() => pickFilter("requested")}
+                className={cn(
+                  "flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors",
+                  filter === "requested" && !watchOnly ? "bg-amber-500 text-white border-amber-500" : "bg-amber-500/5 border-amber-500/30 text-amber-400 hover:bg-amber-500/10"
+                )}
+              >
+                <Send size={14} /> Requested to Approve
+                {requestedCount > 0 && (
+                  <span className={cn("min-w-[16px] h-4 px-1 text-[9px] font-bold rounded-full flex items-center justify-center leading-none",
+                    filter === "requested" && !watchOnly ? "bg-white/25 text-white" : "bg-amber-500 text-white")}>{requestedCount}</span>
+                )}
+              </button>
             )}
-          >
-            <span>Incorrect<br />Data</span>
-          </button>
-          {/* Approval requests queue — visible to approvers (not Executives) */}
-          {!restricted && (
+            {/* Approval queue — AM and higher only. */}
+            {!restricted && (
+              <button
+                onClick={() => pickFilter("requests")}
+                className={cn(
+                  "flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors",
+                  filter === "requests" && !watchOnly ? "bg-[var(--a)] text-white border-transparent" : "bg-[var(--surface2)] border-[var(--border)] text-[var(--tx4)] hover:border-[var(--a-border)]"
+                )}
+              >
+                <Inbox size={14} /> Requests
+                {pendingRequests.length > 0 && (
+                  <span className={cn("min-w-[16px] h-4 px-1 text-[9px] font-bold rounded-full flex items-center justify-center leading-none",
+                    filter === "requests" && !watchOnly ? "bg-white/25 text-white" : "bg-amber-500 text-white")}>{pendingRequests.length}</span>
+                )}
+              </button>
+            )}
+
+            {/* Watch List — a curated cross-cutting view, not a status filter */}
             <button
-              onClick={() => setFilter("requests")}
+              onClick={() => setWatchOnly(v => !v)}
               className={cn(
-                "px-3 py-1.5 rounded-md text-xs font-medium transition-colors flex items-center gap-1.5",
-                filter === "requests" ? "bg-[var(--a)] text-white" : "text-[var(--tx4)] hover:text-[var(--tx2)]"
+                "flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors",
+                watchOnly ? "bg-amber-500/15 border-amber-500/40 text-amber-400" : "bg-[var(--surface2)] border-[var(--border)] text-[var(--tx4)] hover:border-[var(--a-border)]"
               )}
             >
-              <Inbox size={13} /> Requests
-              {pendingRequests.length > 0 && (
+              <Star size={14} className={watchOnly ? "fill-amber-400 text-amber-400" : ""} /> Watch List
+              {watchCount > 0 && (
                 <span className={cn("min-w-[16px] h-4 px-1 text-[9px] font-bold rounded-full flex items-center justify-center leading-none",
-                  filter === "requests" ? "bg-white/25 text-white" : "bg-amber-500 text-white")}>{pendingRequests.length}</span>
+                  watchOnly ? "bg-amber-500 text-white" : "bg-[var(--surface3)] text-[var(--tx3)]")}>{watchCount}</span>
               )}
             </button>
-          )}
+          </div>
         </div>
 
         {/* Requests queue (approvers) */}
-        {filter === "requests" ? (
+        {filter === "requests" && !watchOnly ? (
           <div className="bg-[var(--surface)] border border-[var(--border)] rounded-xl overflow-hidden">
             {pendingRequests.length === 0 ? (
               <p className="px-4 py-10 text-center text-[var(--tx5)] text-sm">No pending approval requests.</p>
             ) : (
               <div className="divide-y divide-[var(--border)]">
-                {pendingRequests.map(req => (
-                  <div key={req.id} className="flex items-center gap-3 px-4 py-3 hover:bg-[var(--surface2)] transition-colors">
+                {pendingRequests.map(req => {
+                  const reqLead = leads.find(l => l.id === req.lead_id);
+                  return (
+                  <div
+                    key={req.id}
+                    onClick={() => reqLead && setViewLead(reqLead)}
+                    className={cn("flex items-center gap-3 px-4 py-3 hover:bg-[var(--surface2)] transition-colors", reqLead && "cursor-pointer")}
+                  >
                     <div className="w-8 h-8 rounded-lg bg-amber-500/15 flex items-center justify-center shrink-0"><Send size={14} className="text-amber-400" /></div>
                     <div className="flex-1 min-w-0">
                       <p className="text-[var(--tx2)] text-sm font-medium truncate">{req.lead_name} <span className="text-[var(--tx5)] font-normal">· {req.company_name}</span></p>
-                      <p className="text-[var(--tx6)] text-[10px] mt-0.5">Requested by {req.requested_by} · {new Date(req.requested_at).toLocaleDateString()}</p>
+                      <p className="text-[var(--tx6)] text-[10px] mt-0.5">Requested by {req.requested_by} · {new Date(req.requested_at).toLocaleDateString()} · <span className="text-[var(--a-text)]">click to review</span></p>
                     </div>
                     {canWrite && (
-                      <div className="flex items-center gap-2 shrink-0">
+                      <div className="flex items-center gap-2 shrink-0" onClick={e => e.stopPropagation()}>
                         <button onClick={() => startApproveRequest(req)} className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs rounded-lg hover:bg-emerald-500/20 transition-colors"><CheckCircle size={13} /> Approve</button>
                         <button onClick={() => rejectRequest(req)} className="flex items-center gap-1.5 px-3 py-1.5 bg-rose-500/10 border border-rose-500/30 text-rose-400 text-xs rounded-lg hover:bg-rose-500/20 transition-colors"><XCircle size={13} /> Reject</button>
                       </div>
                     )}
                   </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>
@@ -1063,28 +1561,38 @@ export default function LeadsPage() {
                     <input type="checkbox" checked={selected.size === filtered.length && filtered.length > 0} onChange={toggleAll} className="accent-[var(--a)] cursor-pointer" />
                   </th>
                 )}
-                {["Name","Email","Company","Source","Status","Date", ...(canWrite ? ["Actions"] : [])].map(h => (
-                  <th key={h} className="px-4 py-3 text-left text-xs text-[var(--tx5)] font-medium">{h}</th>
-                ))}
+                <th className="px-4 py-3 text-left"><ColumnHeader label="Name" value={colFilters.name ?? {}} onChange={v => setCol("name", v)} /></th>
+                <th className="px-4 py-3 text-left"><ColumnHeader label="Email" value={colFilters.email ?? {}} onChange={v => setCol("email", v)} /></th>
+                <th className="px-4 py-3 text-left"><ColumnHeader label="Company" value={colFilters.company ?? {}} onChange={v => setCol("company", v)} /></th>
+                <th className="px-4 py-3 text-left"><ColumnHeader label="Source" type="select" options={[...new Set(leads.map(l => sourceLabels[l.source] ?? l.source))].sort()} value={colFilters.source ?? {}} onChange={v => setCol("source", v)} /></th>
+                <th className="px-4 py-3 text-left"><ColumnHeader label="Status" type="select" options={["new","reviewing","approved","rejected"]} value={colFilters.status ?? {}} onChange={v => setCol("status", v)} /></th>
+                <th className="px-4 py-3 text-left"><ColumnHeader label="Date" type="date" value={colFilters.date ?? {}} onChange={v => setCol("date", v)} /></th>
+                {canWrite && <th className="px-4 py-3 text-left text-xs text-[var(--tx5)] font-medium">Actions</th>}
               </tr>
             </thead>
             <tbody className="divide-y divide-[var(--border)]">
               {filtered.map(lead => {
                 const resp = responses[lead.id];
                 const rCfg = resp ? getRCfg(resp.category) : null;
+                const missingFields = [...leadMissingCritical(lead), ...leadMissingSoft(lead)];
+                const incomplete = missingFields.length > 0;
                 const rowCls = lead.flagged
                   ? "bg-rose-500/10 hover:bg-rose-500/20"
-                  : (selected.has(lead.id) || viewLead?.id === lead.id) ? "bg-[var(--a-subtle)]" : "hover:bg-[var(--surface2)]";
+                  : (selected.has(lead.id) || viewLead?.id === lead.id) ? "bg-[var(--a-subtle)]"
+                  : incomplete ? "bg-amber-500/10 hover:bg-amber-500/20"
+                  : "hover:bg-[var(--surface2)]";
                 return (
-                  <tr key={lead.id} onClick={() => setViewLead(lead)} className={cn("transition-colors cursor-pointer", rowCls)}>
+                  <tr id={`lead-${lead.id}`} key={lead.id} onClick={() => setViewLead(lead)} className={cn("transition-colors cursor-pointer", rowCls, highlightId === lead.id && "ring-2 ring-inset ring-[var(--a)]")}>
                     {canWrite && <td className="px-4 py-3" onClick={e => e.stopPropagation()}><input type="checkbox" checked={selected.has(lead.id)} onChange={() => toggleSelect(lead.id)} className="accent-[var(--a)] cursor-pointer" /></td>}
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-2">
+                        {incomplete && <span title={`Missing: ${missingFields.join(", ")}`} className="shrink-0 flex items-center"><AlertTriangle size={14} className="text-amber-400" /></span>}
                         <div className="w-7 h-7 rounded-full bg-[var(--a-muted)] flex items-center justify-center text-[var(--a-text)] text-xs font-medium shrink-0">{lead.first_name[0]}{lead.last_name[0]}</div>
                         <div className="min-w-0">
                           <span className="text-[var(--tx2)] font-medium truncate flex items-center gap-1.5">{lead.first_name} {lead.last_name}{lead.flagged && <Flag size={11} className="text-rose-400 shrink-0" />}</span>
                           {rCfg && <span className={cn("flex items-center gap-1 text-[10px] mt-0.5", rCfg.text)}><rCfg.Icon size={9} />{rCfg.label}{resp.follow_up_date && <span className="text-[var(--tx6)]">· {resp.follow_up_date}</span>}</span>}
                           {hasPending(lead.id) && <span className="flex items-center gap-1 text-[10px] mt-0.5 text-amber-400"><Send size={9} /> Approval requested</span>}
+                          {lead.profile?.naukri_status === "found" && <span className="flex items-center gap-1 text-[10px] mt-0.5 text-emerald-400"><ShieldCheck size={9} /> Naukri verified</span>}
                         </div>
                       </div>
                     </td>
@@ -1097,7 +1605,11 @@ export default function LeadsPage() {
                     <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
                       <div className="flex items-center gap-2">
                         {restricted ? (
-                          <button onClick={() => handleRequestApproval(lead)} disabled={hasPending(lead.id)} className="flex items-center gap-1 text-xs text-amber-400 hover:text-amber-300 transition-colors disabled:opacity-50 disabled:cursor-default">{hasPending(lead.id) ? "Requested" : <><Send size={11} /> Request</>}</button>
+                          hasPending(lead.id) ? (
+                            <button onClick={() => undoApprovalRequest(lead)} className="flex items-center gap-1 text-xs text-[var(--tx5)] hover:text-rose-400 transition-colors"><X size={11} /> Undo</button>
+                          ) : (
+                            <button onClick={() => handleRequestApproval(lead)} className="flex items-center gap-1 text-xs text-amber-400 hover:text-amber-300 transition-colors"><Send size={11} /> Request</button>
+                          )
                         ) : (
                           <button onClick={() => { setApprovePreset(null); setApproveLead(lead); }} className="text-xs text-emerald-400 hover:text-emerald-300 transition-colors">Approve</button>
                         )}
@@ -1105,6 +1617,14 @@ export default function LeadsPage() {
                         <button onClick={() => setResponseModalLead(lead)} className={cn("text-xs transition-colors", resp ? rCfg!.text : "text-[var(--tx5)] hover:text-[var(--tx3)]")}>{resp ? "Response ✓" : "Response"}</button>
                         <span className="text-[var(--tx6)]">·</span>
                         <button onClick={() => startEditLead(lead)} className="flex items-center gap-1 text-xs text-[var(--tx5)] hover:text-[var(--a-text)] transition-colors"><Pencil size={11} /> Edit</button>
+                        {filter === "missing" && (
+                          <>
+                            <span className="text-[var(--tx6)]">·</span>
+                            <button onClick={() => getDetailsForLead(lead)} disabled={detailsBusyId === lead.id} className="flex items-center gap-1 text-xs text-violet-400 hover:text-violet-300 transition-colors disabled:opacity-50">
+                              {detailsBusyId === lead.id ? <Loader2 size={11} className="animate-spin" /> : <Sparkles size={11} />} Get Details
+                            </button>
+                          </>
+                        )}
                       </div>
                     </td>
                     )}
@@ -1119,16 +1639,21 @@ export default function LeadsPage() {
 
       {/* ── Lead detail modal ── */}
       {viewLead && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50" onClick={() => { setViewLead(null); setDetailTab("overview"); setEditingProfile(false); }}>
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50" onClick={() => { setViewLead(null); setDetailTab("overview"); setEditingProfile(false); setAiError(""); }}>
           <div className="bg-[var(--surface)] border border-[var(--border)] rounded-2xl w-full max-w-lg mx-4 shadow-2xl max-h-[85vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
             <div className="flex items-center justify-between px-5 pt-5 pb-4 border-b border-[var(--border)]">
               <span className="text-[var(--tx2)] font-semibold text-sm">Lead Detail</span>
-              <button onClick={() => { setViewLead(null); setDetailTab("overview"); setEditingProfile(false); }} className="text-[var(--tx5)] hover:text-[var(--tx3)] transition-colors"><X size={14} /></button>
+              <button onClick={() => { setViewLead(null); setDetailTab("overview"); setEditingProfile(false); setAiError(""); }} className="text-[var(--tx5)] hover:text-[var(--tx3)] transition-colors"><X size={14} /></button>
             </div>
             <div className="flex flex-col items-center gap-2 pt-5 pb-4 px-5 border-b border-[var(--border)]">
               <div className="w-14 h-14 rounded-full bg-[var(--a-muted)] flex items-center justify-center text-[var(--a-text)] text-xl font-bold">{viewLead.first_name[0]}{viewLead.last_name[0]}</div>
               <p className="text-[var(--tx1)] font-semibold text-base text-center">{viewLead.first_name} {viewLead.last_name}</p>
-              <span className={cn("inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs border capitalize font-medium", statusColors[viewLead.status])}>{statusIcons[viewLead.status]}{viewLead.status}</span>
+              <div className="flex items-center gap-1.5 flex-wrap justify-center">
+                <span className={cn("inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs border capitalize font-medium", statusColors[viewLead.status])}>{statusIcons[viewLead.status]}{viewLead.status}</span>
+                {viewLead.profile?.naukri_status === "found" && (
+                  <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs border font-medium bg-emerald-500/15 text-emerald-400 border-emerald-500/30"><ShieldCheck size={12} /> Naukri Verified</span>
+                )}
+              </div>
             </div>
 
             {/* Tab bar — only for roles that can read Lead Profiles */}
@@ -1310,17 +1835,51 @@ export default function LeadsPage() {
             <div className="px-5 py-4 space-y-2.5 border-b border-[var(--border)]">
               <a href={`mailto:${viewLead.email}`} className="flex items-center gap-3 p-2.5 bg-[var(--surface2)] rounded-lg hover:bg-[var(--surface3)] transition-colors group">
                 <Mail size={13} className="text-[var(--a-text)] shrink-0" />
-                <span className="text-[var(--tx3)] text-xs truncate group-hover:text-[var(--tx1)] transition-colors">{viewLead.email}</span>
+                <div className="min-w-0"><p className="text-[10px] text-[var(--tx5)] mb-0.5">Email</p><span className="text-[var(--tx3)] text-xs truncate block group-hover:text-[var(--tx1)] transition-colors">{viewLead.email}</span></div>
               </a>
-              {viewLead.phone && <div className="flex items-center gap-3 p-2.5 bg-[var(--surface2)] rounded-lg"><Phone size={13} className="text-emerald-400 shrink-0" /><span className="text-[var(--tx3)] text-xs">{viewLead.phone}</span></div>}
-              <div className="flex items-center gap-3 p-2.5 bg-[var(--surface2)] rounded-lg"><Building2 size={13} className="text-amber-400 shrink-0" /><span className="text-[var(--tx3)] text-xs">{viewLead.company_name}</span></div>
+              <div className="flex items-center gap-3 p-2.5 bg-[var(--surface2)] rounded-lg"><Phone size={13} className="text-emerald-400 shrink-0" /><div><p className="text-[10px] text-[var(--tx5)] mb-0.5">Phone</p><p className="text-[var(--tx3)] text-xs">{viewLead.phone || <span className="text-[var(--tx6)] italic">Not set</span>}</p></div></div>
+              <div className="flex items-center gap-3 p-2.5 bg-[var(--surface2)] rounded-lg"><Building2 size={13} className="text-amber-400 shrink-0" /><div><p className="text-[10px] text-[var(--tx5)] mb-0.5">Company</p><p className="text-[var(--tx3)] text-xs">{viewLead.company_name || <span className="text-[var(--tx6)] italic">Not set</span>}</p></div></div>
               <div className="flex items-center gap-3 p-2.5 bg-[var(--surface2)] rounded-lg"><Zap size={13} className="text-violet-400 shrink-0" /><div><p className="text-[10px] text-[var(--tx5)] mb-0.5">Source</p><p className="text-[var(--tx3)] text-xs">{sourceLabels[viewLead.source] ?? viewLead.source}</p></div></div>
+              <div className="flex items-center gap-3 p-2.5 bg-[var(--surface2)] rounded-lg"><Cake size={13} className="text-pink-400 shrink-0" /><div><p className="text-[10px] text-[var(--tx5)] mb-0.5">Date of Birth</p><p className="text-[var(--tx3)] text-xs">{viewLead.date_of_birth || <span className="text-[var(--tx6)] italic">Not set</span>}</p></div></div>
+              <div className="flex items-center gap-3 p-2.5 bg-[var(--surface2)] rounded-lg"><MapPin size={13} className="text-rose-400 shrink-0" /><div><p className="text-[10px] text-[var(--tx5)] mb-0.5">Address</p><p className="text-[var(--tx3)] text-xs">{viewLead.address || <span className="text-[var(--tx6)] italic">Not set</span>}</p></div></div>
+              {viewLead.linkedin ? (
+                <a href={viewLead.linkedin.startsWith("http") ? viewLead.linkedin : `https://${viewLead.linkedin}`} target="_blank" rel="noreferrer" className="flex items-center gap-3 p-2.5 bg-[var(--surface2)] rounded-lg hover:bg-[var(--surface3)] transition-colors group"><Link size={13} className="text-sky-400 shrink-0" /><div className="min-w-0"><p className="text-[10px] text-[var(--tx5)] mb-0.5">LinkedIn</p><span className="text-[var(--tx3)] text-xs truncate block group-hover:text-[var(--tx1)] transition-colors">{viewLead.linkedin}</span></div></a>
+              ) : (
+                <div className="flex items-center gap-3 p-2.5 bg-[var(--surface2)] rounded-lg"><Link size={13} className="text-sky-400 shrink-0" /><div><p className="text-[10px] text-[var(--tx5)] mb-0.5">LinkedIn</p><p className="text-[var(--tx3)] text-xs"><span className="text-[var(--tx6)] italic">Not set</span></p></div></div>
+              )}
               <div className="flex items-center gap-3 p-2.5 bg-[var(--surface2)] rounded-lg"><Calendar size={13} className="text-[var(--tx5)] shrink-0" /><div><p className="text-[10px] text-[var(--tx5)] mb-0.5">Created</p><p className="text-[var(--tx3)] text-xs">{viewLead.created_at}</p></div></div>
               <div className="flex items-center gap-3 p-2.5 bg-[var(--surface2)] rounded-lg"><Tag size={13} className="text-[var(--tx5)] shrink-0" /><div><p className="text-[10px] text-[var(--tx5)] mb-0.5">Lead ID</p><p className="text-[var(--tx3)] text-xs font-mono">#{viewLead.id.padStart(4, "0")}</p></div></div>
-              {viewLead.date_of_birth && <div className="flex items-center gap-3 p-2.5 bg-[var(--surface2)] rounded-lg"><Cake size={13} className="text-pink-400 shrink-0" /><div><p className="text-[10px] text-[var(--tx5)] mb-0.5">Date of Birth</p><p className="text-[var(--tx3)] text-xs">{viewLead.date_of_birth}</p></div></div>}
-              {viewLead.address && <div className="flex items-center gap-3 p-2.5 bg-[var(--surface2)] rounded-lg"><MapPin size={13} className="text-rose-400 shrink-0" /><div><p className="text-[10px] text-[var(--tx5)] mb-0.5">Address</p><p className="text-[var(--tx3)] text-xs">{viewLead.address}</p></div></div>}
-              {viewLead.linkedin && <a href={viewLead.linkedin.startsWith("http") ? viewLead.linkedin : `https://${viewLead.linkedin}`} target="_blank" rel="noreferrer" className="flex items-center gap-3 p-2.5 bg-[var(--surface2)] rounded-lg hover:bg-[var(--surface3)] transition-colors group"><Link size={13} className="text-sky-400 shrink-0" /><span className="text-[var(--tx3)] text-xs truncate group-hover:text-[var(--tx1)] transition-colors">{viewLead.linkedin}</span></a>}
-              {viewLead.summary && <div className="flex items-start gap-3 p-2.5 bg-[var(--surface2)] rounded-lg"><FileText size={13} className="text-[var(--tx5)] shrink-0 mt-0.5" /><div><p className="text-[10px] text-[var(--tx5)] mb-0.5">Summary / About</p><p className="text-[var(--tx3)] text-xs leading-relaxed whitespace-pre-wrap">{viewLead.summary}</p></div></div>}
+
+              {/* AI Summary — generated on demand by Gemini */}
+              <div className="p-2.5 bg-[var(--surface2)] rounded-lg">
+                <div className="flex items-center justify-between mb-2">
+                  <p className="text-[10px] text-[var(--tx5)] flex items-center gap-1.5"><Sparkles size={11} className="text-violet-400" /> AI Summary</p>
+                  {canWrite && viewLead.summary && !aiBusy && (
+                    <button onClick={() => generateLeadSummary(viewLead)} className="text-[10px] text-violet-400 hover:text-violet-300 transition-colors flex items-center gap-1"><Sparkles size={10} /> Regenerate</button>
+                  )}
+                </div>
+                {aiBusy ? (
+                  <div className="rounded-lg border border-dashed border-[var(--border)] bg-[var(--surface)] p-4 text-center">
+                    <Loader2 size={16} className="text-violet-400 mx-auto mb-1.5 animate-spin" />
+                    <p className="text-[var(--tx5)] text-xs italic">Generating summary…</p>
+                  </div>
+                ) : viewLead.summary ? (
+                  <div className="rounded-lg border border-[var(--border)] bg-[var(--surface)] p-3">
+                    <p className="text-[var(--tx3)] text-xs leading-relaxed whitespace-pre-wrap">{viewLead.summary}</p>
+                    {aiError && <p className="text-rose-400 text-[10px] mt-2">{aiError}</p>}
+                  </div>
+                ) : (
+                  <div className="rounded-lg border border-dashed border-[var(--border)] bg-[var(--surface)] p-4 text-center">
+                    <Sparkles size={18} className="text-violet-400 mx-auto mb-1.5 opacity-70" />
+                    {aiError
+                      ? <p className="text-rose-400 text-xs mb-2">{aiError}</p>
+                      : <p className="text-[var(--tx5)] text-xs italic mb-2">No summary yet.</p>}
+                    {canWrite
+                      ? <button onClick={() => generateLeadSummary(viewLead)} className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-violet-500/10 border border-violet-500/30 text-violet-300 text-[11px] rounded-lg hover:bg-violet-500/20 transition-colors"><Sparkles size={11} /> Generate with AI</button>
+                      : <span className="text-[var(--tx6)] text-[10px]">Ask an editor to generate one.</span>}
+                  </div>
+                )}
+              </div>
             </div>
 
             {/* Response section */}
@@ -1360,7 +1919,11 @@ export default function LeadsPage() {
             <div className="px-5 py-4 border-b border-[var(--border)]">
               <div className="grid grid-cols-2 gap-2">
                 {restricted ? (
-                  <button onClick={() => handleRequestApproval(viewLead)} disabled={hasPending(viewLead.id)} className="py-2 bg-amber-500/10 border border-amber-500/30 text-amber-400 text-xs rounded-lg hover:bg-amber-500/20 transition-colors font-medium flex items-center justify-center gap-1.5 disabled:opacity-50 disabled:cursor-default"><Send size={13} /> {hasPending(viewLead.id) ? "Requested" : "Request Approval"}</button>
+                  hasPending(viewLead.id) ? (
+                    <button onClick={() => undoApprovalRequest(viewLead)} className="py-2 bg-[var(--surface2)] border border-[var(--border)] text-[var(--tx4)] text-xs rounded-lg hover:border-rose-500/40 hover:text-rose-400 transition-colors font-medium flex items-center justify-center gap-1.5"><X size={13} /> Undo Request</button>
+                  ) : (
+                    <button onClick={() => handleRequestApproval(viewLead)} className="py-2 bg-amber-500/10 border border-amber-500/30 text-amber-400 text-xs rounded-lg hover:bg-amber-500/20 transition-colors font-medium flex items-center justify-center gap-1.5"><Send size={13} /> Request Approval</button>
+                  )
                 ) : (
                   <button onClick={() => { setApprovePreset(null); setApproveLead(viewLead); setViewLead(null); }} className="py-2 bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs rounded-lg hover:bg-emerald-500/20 transition-colors font-medium">✓ Approve</button>
                 )}
@@ -1394,14 +1957,19 @@ export default function LeadsPage() {
                 <div className="space-y-2.5">
                   {leadMeetings.map(m => (
                     <div key={m.id} className="p-3 bg-[var(--surface2)] rounded-xl space-y-2">
-                      {/* Header: title + mode */}
+                      {/* Header: title + mode + delete */}
                       <div className="flex items-start justify-between gap-2">
                         <p className="text-[var(--tx2)] text-xs font-medium leading-tight">{m.title}</p>
-                        <span className={cn("shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[9px] font-medium border",
+                        <div className="flex items-center gap-1.5 shrink-0">
+                        <span className={cn("inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[9px] font-medium border",
                           m.meeting_mode === "offline" ? "bg-amber-500/10 text-amber-400 border-amber-500/30" : "bg-sky-500/10 text-sky-400 border-sky-500/30")}>
                           {m.meeting_mode === "offline" ? <MapPin size={9} /> : <Video size={9} />}
                           {m.meeting_mode === "offline" ? "In person" : "Online"}
                         </span>
+                        {canWrite && (
+                          <button onClick={() => { deleteCalendarEvent(m.id); showToast("Meeting deleted"); }} title="Delete meeting" className="text-[var(--tx5)] hover:text-rose-400 transition-colors"><Trash2 size={12} /></button>
+                        )}
+                        </div>
                       </div>
 
                       {/* Date / time */}
@@ -1471,8 +2039,51 @@ export default function LeadsPage() {
                 </div>
               )}
             </div>
+
+            {/* Dump data (hidden extra info) */}
+            <div className="px-5 py-4">
+              <DumpPanel entityType="lead" entityId={viewLead.id} />
+            </div>
             </>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* ── Bulk CSV import ── */}
+      <CsvImportModal open={showImport} onClose={() => setShowImport(false)} fields={CSV_FIELDS} onImport={handleCsvImport} />
+
+      {/* ── Duplicate warning ── */}
+      {dupModal && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[80] p-4" onClick={() => setDupModal(null)}>
+          <div className="bg-[var(--surface)] border border-[var(--border)] rounded-2xl w-full max-w-md shadow-2xl max-h-[85vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+            <div className="flex items-start gap-3 px-5 pt-5 pb-3">
+              <span className="w-9 h-9 rounded-lg bg-amber-500/15 flex items-center justify-center shrink-0"><AlertTriangle size={18} className="text-amber-400" /></span>
+              <div className="flex-1 min-w-0">
+                <h3 className="text-[var(--tx1)] font-semibold">Possible duplicate</h3>
+                <p className="text-[var(--tx5)] text-xs mt-0.5">This person may already be in the database ({dupModal.matches.map(m => m.where).filter((w, i, a) => a.indexOf(w) === i).join(" & ")}).</p>
+              </div>
+            </div>
+            <div className="px-5 pb-1 space-y-2">
+              {dupModal.matches.map((m, i) => (
+                <div key={i} className="p-3 rounded-lg bg-[var(--surface2)] border border-[var(--border)]">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[var(--tx2)] text-sm font-medium truncate">{m.name}</span>
+                    <span className={cn("px-2 py-0.5 rounded-full text-[10px] font-medium border shrink-0", m.where === "Leads" ? "bg-sky-500/15 text-sky-400 border-sky-500/30" : "bg-violet-500/15 text-violet-400 border-violet-500/30")}>{m.where}</span>
+                  </div>
+                  {m.company && m.company !== "—" && <p className="text-[var(--tx5)] text-[11px] mt-0.5">{m.company}</p>}
+                  <div className="flex flex-wrap gap-x-3 gap-y-1 mt-1.5 text-[11px]">
+                    <span className={cn("flex items-center gap-1", m.on.includes("email") ? "text-amber-400 font-medium" : "text-[var(--tx5)]")}><Mail size={11} /> {m.email || "—"}{m.on.includes("email") ? " · matches" : ""}</span>
+                    <span className={cn("flex items-center gap-1", m.on.includes("phone") ? "text-amber-400 font-medium" : "text-[var(--tx5)]")}><Phone size={11} /> {m.phone || "—"}{m.on.includes("phone") ? " · matches" : ""}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <p className="px-5 pt-2 text-[var(--tx5)] text-[11px] leading-relaxed">Someone may legitimately reappear — e.g. same phone but a new company &amp; email. Add anyway, or go back and modify the details.</p>
+            <div className="flex gap-2 p-5 pt-3">
+              <button onClick={() => setDupModal(null)} className="flex-1 py-2.5 bg-[var(--surface2)] border border-[var(--border)] text-[var(--tx3)] text-sm rounded-xl hover:border-[var(--a-border)] transition-colors flex items-center justify-center gap-1.5"><Pencil size={13} /> Modify</button>
+              <button onClick={() => commitAddLead(dupModal.form)} className="flex-1 py-2.5 bg-[var(--a)] text-white text-sm rounded-xl hover:bg-[var(--a-hover)] font-medium transition-colors">Add anyway</button>
+            </div>
           </div>
         </div>
       )}
@@ -1498,7 +2109,6 @@ export default function LeadsPage() {
                 <div><label className={labelCls}>LinkedIn</label><input className={inputCls} placeholder="linkedin.com/in/…" value={addForm.linkedin} onChange={e => setAddForm(f => ({ ...f, linkedin: e.target.value }))} /></div>
               </div>
               <div><label className={labelCls}>Address</label><input className={inputCls} placeholder="City, Country" value={addForm.address} onChange={e => setAddForm(f => ({ ...f, address: e.target.value }))} /></div>
-              <div><label className={labelCls}>Summary / About</label><textarea rows={3} className={cn(inputCls, "resize-none")} placeholder="Interests, hobbies, background… (AI-scraped later)" value={addForm.summary} onChange={e => setAddForm(f => ({ ...f, summary: e.target.value }))} /></div>
               <div className="grid grid-cols-2 gap-3">
                 <div><label className={labelCls}>Source</label><select className={inputCls} value={addForm.source} onChange={e => setAddForm(f => ({ ...f, source: e.target.value }))}><option value="inbound_web">Web Form</option><option value="n8n_apify">Apify / LinkedIn</option><option value="manual_ocr">Business Card</option></select></div>
                 <div><label className={labelCls}>Status</label><select className={inputCls} value={addForm.status} onChange={e => setAddForm(f => ({ ...f, status: e.target.value }))}><option value="new">New</option><option value="reviewing">Reviewing</option><option value="approved">Approved</option><option value="rejected">Rejected</option></select></div>
@@ -1519,6 +2129,7 @@ export default function LeadsPage() {
           lead={approveLead}
           createAccount={createAccount}
           createContact={createContact}
+          autoSummarize={autoSummarize}
           onApproved={handleApproved}
           onClose={() => { setApproveLead(null); setApprovePreset(null); setActiveRequestId(null); }}
           initialAddAccount={approvePreset ? approvePreset.account : true}
@@ -1548,7 +2159,6 @@ export default function LeadsPage() {
                 <div><label className={labelCls}>LinkedIn</label><input className={inputCls} placeholder="linkedin.com/in/…" value={editForm.linkedin} onChange={e => setEditForm(f => ({ ...f, linkedin: e.target.value }))} /></div>
               </div>
               <div><label className={labelCls}>Address</label><input className={inputCls} placeholder="City, Country" value={editForm.address} onChange={e => setEditForm(f => ({ ...f, address: e.target.value }))} /></div>
-              <div><label className={labelCls}>Summary / About</label><textarea rows={3} className={cn(inputCls, "resize-none")} placeholder="Interests, hobbies, background…" value={editForm.summary} onChange={e => setEditForm(f => ({ ...f, summary: e.target.value }))} /></div>
               <div className="grid grid-cols-2 gap-3">
                 <div><label className={labelCls}>Source</label><select className={inputCls} value={editForm.source} onChange={e => setEditForm(f => ({ ...f, source: e.target.value }))}><option value="inbound_web">Web Form</option><option value="n8n_apify">Apify / LinkedIn</option><option value="manual_ocr">Business Card</option></select></div>
                 <div><label className={labelCls}>Status</label><select className={inputCls} value={editForm.status} onChange={e => setEditForm(f => ({ ...f, status: e.target.value }))}><option value="new">New</option><option value="reviewing">Reviewing</option><option value="approved">Approved</option><option value="rejected">Rejected</option></select></div>
@@ -1563,16 +2173,18 @@ export default function LeadsPage() {
       )}
 
       {/* Log Response modal */}
-      {responseModalLead && <LogResponseModal lead={responseModalLead} existing={responses[responseModalLead.id]} today={today} nowISO={now} onSave={saveResponse} onClose={() => setResponseModalLead(null)} />}
+      {responseModalLead && <LogResponseModal lead={responseModalLead} existing={responses[responseModalLead.id]} today={today} nowISO={now} restricted={restricted} onSave={saveResponse} onClose={() => setResponseModalLead(null)} onPickMeeting={() => { const l = responseModalLead; setResponseModalLead(null); setMeetingModalLead(l); }} />}
 
-      {/* Schedule Meeting modal (pre-linked to the lead) */}
+      {/* Schedule Meeting wizard (pre-linked to the lead) */}
       {meetingModalLead && (
-        <MeetingModal
-          onClose={() => setMeetingModalLead(null)}
-          onSave={handleSaveMeeting}
-          userOptions={userOptions}
-          today={today}
+        <MeetingWizard
+          audience="client"
           lead={meetingModalLead}
+          users={users}
+          today={today}
+          currentUser={currentUser}
+          onClose={() => setMeetingModalLead(null)}
+          onFinish={handleWizardFinish}
         />
       )}
 
