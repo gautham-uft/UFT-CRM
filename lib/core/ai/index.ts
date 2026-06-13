@@ -27,10 +27,30 @@ export type LeadSummaryInput = {
 
 export type SummaryKind = "contact" | "account";
 
+// One logged interaction (call / email / note / meeting) tied to an account or
+// one of the people/deals/leads under it. Used to digest account engagement.
+export type ActivityTouch = {
+  date?: string;        // ISO timestamp
+  type?: string;        // call_log | email | note | meeting
+  on?: string;          // who/what it was on, e.g. "James Carter (contact)"
+  by?: string;          // who logged it
+  description?: string;
+};
+
+export type ActivityKind = "account" | "contact" | "lead";
+
+export type ActivityInput = {
+  kind: ActivityKind;
+  subject: string;       // account name / contact name / lead name
+  context?: string;      // industry for an account; company for a contact/lead
+  touches: ActivityTouch[];   // recent first
+};
+
 export interface Summarizer {
   summarizeDocument(doc: DocumentRef): Promise<string>;
   summarizeLead(lead: LeadSummaryInput): Promise<string>;
   summarizeEntity(kind: SummaryKind, facts: Record<string, string>, extra?: Record<string, unknown>): Promise<string>;
+  summarizeActivity(input: ActivityInput): Promise<string>;
 }
 
 export interface AiModules {

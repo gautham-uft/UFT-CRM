@@ -12,6 +12,7 @@ import NoAccess from "@/components/NoAccess";
 import NotesSection from "@/components/NotesSection";
 import AiSummaryCard from "@/components/AiSummaryCard";
 import DumpPanel from "@/components/DumpPanel";
+import ActivityPanel from "@/components/ActivityPanel";
 import { apiUrl } from "@/lib/api-base";
 
 type Account = (typeof mockAccounts)[0] & { flagged?: boolean; ai_summary?: string };
@@ -338,6 +339,7 @@ export default function AccountsPage() {
                   <button onClick={handleDeleteAccount} className="flex items-center justify-center gap-2 py-2.5 bg-rose-500/10 border border-rose-500/30 text-rose-400 text-xs rounded-lg hover:bg-rose-500/20 transition-colors font-medium"><Trash2 size={13} /> Delete</button>
                 </div>
                 )}
+                <ActivityPanel kind="account" collection="accounts" entityId={selected.id} canWrite={canWrite} />
                 <DumpPanel entityType="account" entityId={selected.id} />
               </>
             )}

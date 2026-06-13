@@ -24,6 +24,7 @@ import { isRestrictedRole } from "@/lib/permissions";
 import NoAccess from "@/components/NoAccess";
 import NotesSection from "@/components/NotesSection";
 import DumpPanel from "@/components/DumpPanel";
+import ActivityPanel from "@/components/ActivityPanel";
 import { useQuickActions } from "@/components/QuickActions";
 import MeetingWizard, { type MeetingWizardResult } from "@/components/MeetingWizard";
 import { buildManpowerIntro } from "@/lib/email-templates";
@@ -2040,7 +2041,10 @@ export default function LeadsPage() {
               )}
             </div>
 
-            {/* Dump data (hidden extra info) */}
+            {/* Activity digest + dump data (hidden extra info) */}
+            <div className="px-5 py-4">
+              <ActivityPanel kind="lead" collection="leads" entityId={viewLead.id} canWrite={canWrite} />
+            </div>
             <div className="px-5 py-4">
               <DumpPanel entityType="lead" entityId={viewLead.id} />
             </div>
